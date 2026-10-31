@@ -4,6 +4,8 @@ rem Safe to run again: it updates what's there and fetches only what's missing.
 rem Options (passed to the ComfyUI step): --comfy-dir DIR  --comfy-python PATH  --yes
 setlocal EnableExtensions
 cd /d "%~dp0"
+rem uv's cache is often on another drive, where it copies instead of linking (and warns).
+set "UV_LINK_MODE=copy"
 
 rem Files in use can't be updated, so Lookaround (and a ComfyUI it started) must be closed.
 powershell -NoProfile -Command "if (Get-Process python* -ErrorAction SilentlyContinue | Where-Object { $_.Path -like '%~dp0*' }) { exit 1 }" || (
