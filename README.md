@@ -17,13 +17,21 @@ lets you look around the result in a web browser or a VR headset. Everything run
    to roll), right-drag to pan, scroll to move in, WASD/QE to fly, and R to glide back to the
    photo. A WebXR button opens it in a headset.
 
-## Run it
+## Install and run
 
-Start ComfyUI, then double-click `Lookaround.bat` (or run
-`.venv\Scripts\python.exe -m uvicorn server:app --host 127.0.0.1 --port 8000`) and open
-<http://127.0.0.1:8000>. Drop a photo: the orbit starts at once and takes about 20 minutes on
-an RTX 4090. When it is done, choose the views and press **Build splat** (about two minutes
-with refining), then **Open viewer**.
+Lookaround runs on Windows with an NVIDIA GPU (an RTX 4090 takes about 20 minutes per orbit).
+You need [Git](https://git-scm.com/download/win); the installer gets everything else.
+
+1. **`install.bat`** sets everything up inside the Lookaround folder (about 45 GB, mostly the
+   H3 models). It asks where ComfyUI is: press Enter to have it cloned into `ComfyUI\` with its
+   own venv, or give the folder of a ComfyUI you already have (then Lookaround uses it as it is,
+   asks which Python runs it, and only adds what's missing). Run it again any time to update.
+2. **`run.bat`** starts Lookaround and opens <http://127.0.0.1:8000>. If ComfyUI isn't already
+   running, Lookaround starts it in the background (its log is `comfyui.log`) and stops it when
+   you close the window.
+
+Drop a photo: the orbit starts at once. When it is done, choose the views and press
+**Build splat** (about two minutes with refining), then **Open viewer**.
 
 **Why carve?** AnySplat places every pixel of every view at that view's own depth guess. Across
 an H3 orbit the guesses don't quite agree (and H3 redraws the background as it turns), so each
@@ -53,10 +61,20 @@ AnySplat and refining (`lookaround/frames.py`). Click frames to pick your own (V
 the photo always stays, as the splat is anchored to it. The front arcs
 (±30° to ±90° around the photo) are there for a front-only viewer.
 
-## Set up
+## What install.bat sets up
 
-- **ComfyUI** with the [ComfyUI-GGUF](https://github.com/city96/ComfyUI-GGUF) nodes and these
-  models:
+- **uv**, if it isn't installed, to make the Python venvs.
+- **`.venv`** (Python 3.11, PyTorch 2.5.1 for CUDA 12.4): the web app, AnySplat and the subject
+  masks (`requirements.txt`).
+- **`.venv-refine`** (Python 3.10, PyTorch 2.4.1): refining. gsplat's CUDA kernels come prebuilt
+  for Windows only for Python 3.10, so refining has a venv of its own (`lookaround/refine.py`).
+- **AnySplat's code** in `vendor/AnySplat`. Its weights (`lhjiang/anysplat`) download the first
+  time you build a splat.
+- **ComfyUI** (`lookaround/install.py`): cloned into `ComfyUI\` with its own venv (a current
+  PyTorch for CUDA 12.8; AnySplat needs an older one), or an existing ComfyUI. Either way it
+  gets the [ComfyUI-GGUF](https://github.com/city96/ComfyUI-GGUF) nodes and these models, which
+  are downloaded only if they aren't already in its `models` folder (or in a folder its
+  `extra_model_paths.yaml` names):
 
   | Folder | File | From |
   | --- | --- | --- |
@@ -65,32 +83,11 @@ the photo always stays, as the splat is anchored to it. The front arcs
   | `vae` | `minimax_h3_video_vae_fp16.safetensors` | Comfy-Org/MiniMax-H3 |
   | `loras` | `minimax_h3_flf2v_lora_v1.safetensors` | pablodawson/MiniMax-H3-360-Orbit-LoRA |
 
-- **AnySplat code:** `git clone https://github.com/InternRobotics/AnySplat vendor/AnySplat`.
-  Its weights (`lhjiang/anysplat`) download on first use.
-- **Python 3.11 venv** (CUDA 12.4 wheels; the CUDA 12.4 toolkit and MSVC are only needed if
-  gsplat has to compile):
+- **`config.json`**: the ComfyUI folder, the Python that runs it, and `comfy_url` (change it if
+  your ComfyUI isn't at <http://127.0.0.1:8188>). Before a splat build, Lookaround asks ComfyUI
+  to unload its models, which it otherwise keeps in VRAM.
 
-  ```
-  uv venv --python 3.11 .venv
-  uv pip install --python .venv\Scripts\python.exe torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu124
-  uv pip install --python .venv\Scripts\python.exe xformers==0.0.28.post3 --index-url https://download.pytorch.org/whl/cu124
-  uv pip install --python .venv\Scripts\python.exe torch-scatter -f https://data.pyg.org/whl/torch-2.5.1+cu124.html
-  uv pip install --python .venv\Scripts\python.exe -r requirements.txt
-  ```
-
-- **Refine venv.** gsplat's CUDA kernels come prebuilt for Windows only for Python 3.10 (building
-  them needs MSVC 2022, and CUDA 12.4 can't build with Visual Studio 18), so refining runs in
-  a second venv. Without it, the Refine option is greyed out:
-
-  ```
-  uv venv --python 3.10 .venv-refine
-  uv pip install --python .venv-refine\Scripts\python.exe torch==2.4.1 --index-url https://download.pytorch.org/whl/cu124
-  uv pip install --python .venv-refine\Scripts\python.exe "https://github.com/nerfstudio-project/gsplat/releases/download/v1.5.3/gsplat-1.5.3%2Bpt24cu124-cp310-cp310-win_amd64.whl" "numpy<2" plyfile pillow packaging setuptools
-  ```
-
-- **`config.json`** (optional; copy `config.example.json`): `comfy_url`, if ComfyUI isn't at
-  <http://127.0.0.1:8188>. Before a splat build, Lookaround asks ComfyUI to unload its
-  models, which it otherwise keeps in VRAM.
+`install.bat --comfy-dir C:\path	o\ComfyUI --yes` installs without asking.
 
 ## Each run
 

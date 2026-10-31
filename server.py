@@ -21,6 +21,7 @@ from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.staticfiles import StaticFiles
 
 from lookaround.comfy import ComfyClient, ComfyError
+from lookaround.comfyui import ComfyUI
 from lookaround.config import comfy_url
 from lookaround.frames import arc_frame_count, check_custom, distinct_frames, pick_arc, pick_indices
 
@@ -42,12 +43,16 @@ DEFAULT_SEED = 12345
 # H3 and AnySplat would fight over the card, so only one GPU job runs at a time.
 gpu_lock = threading.Lock()
 RUNS.mkdir(exist_ok=True)
+# The ComfyUI install.bat set up, started when it isn't running already.
+comfyui = ComfyUI()
 
 
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
     mark_interrupted()
+    comfyui.start()  # it takes a while to load, so start it now rather than at the first orbit
     yield
+    comfyui.stop()
 
 
 app = FastAPI(title="Lookaround", lifespan=lifespan)
@@ -126,6 +131,7 @@ def run_command(run: Path, command: list[str], on_line) -> int:
 def orbit_job(run: Path) -> None:
     state = read_state(run)
     write_state(run, status="orbiting", progress=0, message="Starting the H3 orbit", error=None)
+    comfyui.wait_until_up(on_wait=lambda s: write_state(run, message=f"Starting ComfyUI ({s:.0f} s)"))
     # A new orbit (re-rolled with another seed) makes everything built from the old one stale.
     for stale in ("orbit", "masks", "splat"):
         shutil.rmtree(run / stale, ignore_errors=True)

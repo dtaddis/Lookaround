@@ -1,10 +1,10 @@
 @echo off
-rem Lookaround launcher: starts the web app and opens it in your browser.
-rem Needs ComfyUI running (for the H3 orbit) and the .venv set up as in README.md.
+rem Lookaround: starts the web app (and ComfyUI, if it isn't running) and opens it in your browser.
+rem Close this window to stop both.
 setlocal
 cd /d "%~dp0"
 if not exist ".venv\Scripts\python.exe" (
-    echo Lookaround is not set up yet. See README.md.
+    echo Lookaround isn't installed yet. Run install.bat first.
     pause
     exit /b 1
 )
