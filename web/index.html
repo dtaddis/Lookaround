@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lookaround</title>
+<style>
+  :root {
+    --bg: #f6f5f2; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6a65;
+    --line: #dcd9d2; --accent: #2f6fdb; --accent-ink: #ffffff; --good: #2a8a4a; --bad: #b3261e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #161614; --panel: #201f1d; --ink: #ecebe7; --muted: #9b9a94;
+      --line: #3a3834; --accent: #6b9cf0; --accent-ink: #0d0d0c; --good: #5fc382; --bad: #f08a83;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #161614; --panel: #201f1d; --ink: #ecebe7; --muted: #9b9a94;
+    --line: #3a3834; --accent: #6b9cf0; --accent-ink: #0d0d0c; --good: #5fc382; --bad: #f08a83;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.45 system-ui, sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+  .drop {
+    display: block; border: 2px dashed var(--line); border-radius: 12px; padding: 40px 16px; text-align: center;
+    cursor: pointer; color: var(--muted);
+  }
+  .drop.over { border-color: var(--accent); color: var(--ink); }
+  .drop strong { color: var(--ink); }
+  input[type="file"] { display: none; }
+  label.field { display: inline-flex; gap: 8px; align-items: center; color: var(--muted); }
+  input[type="number"], select {
+    background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; font: inherit;
+  }
+  input[type="number"] { width: 84px; }
+  button, .button {
+    background: var(--accent); color: var(--accent-ink); border: 0; border-radius: 8px; padding: 9px 14px;
+    font: inherit; font-weight: 600; cursor: pointer; text-decoration: none; display: inline-block;
+  }
+  button:disabled { opacity: .45; cursor: default; }
+  .button.secondary { background: transparent; color: var(--accent); border: 1px solid var(--line); }
+  .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 760px) { .grid2 { grid-template-columns: 1fr; } }
+  img.photo, video { width: 100%; border-radius: 8px; background: #000; display: block; }
+  .bar { height: 10px; background: var(--line); border-radius: 99px; overflow: hidden; margin: 10px 0 6px; }
+  .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .4s ease; }
+  .status { font-weight: 600; }
+  .status.error { color: var(--bad); }
+  .status.done { color: var(--good); }
+  .muted { color: var(--muted); font-size: 13px; }
+  .frames { display: grid; grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); gap: 6px; margin-top: 10px; }
+  .frames img { width: 100%; aspect-ratio: 3 / 4; object-fit: cover; border-radius: 6px; opacity: .35; border: 2px solid transparent; }
+  .frames img.used { opacity: 1; border-color: var(--accent); }
+  pre.log { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; font-size: 12px; max-height: 180px; overflow: auto; white-space: pre-wrap; margin: 10px 0 0; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Lookaround</h1>
+  <p class="sub">Drop a photo. H3 films an orbit around it, AnySplat turns the frames into a splat, and the viewer shows it.</p>
+
+  <section class="panel" id="intake">
+    <label class="drop" id="drop" tabindex="0">
+      <strong>Drop a photo here</strong> or click to choose one (JPG, PNG or WebP)
+      <input type="file" id="file" accept="image/jpeg,image/png,image/webp">
+    </label>
+  </section>
+
+  <section class="panel hidden" id="run">
+    <div class="row" style="justify-content:space-between">
+      <span class="status" id="status">Waiting</span>
+      <span class="muted" id="runId"></span>
+    </div>
+    <div class="bar"><div id="bar"></div></div>
+    <div class="muted" id="message"></div>
+    <button class="hidden" id="orbit" style="margin-top:10px">Make orbit</button>
+    <pre class="log hidden" id="log"></pre>
+  </section>
+
+  <div class="grid2 hidden" id="results">
+    <section class="panel">
+      <h2 style="font-size:16px;margin:0 0 10px">Photo</h2>
+      <img class="photo" id="photo" alt="Your photo">
+    </section>
+    <section class="panel">
+      <h2 style="font-size:16px;margin:0 0 10px">H3 orbit</h2>
+      <video id="video" controls loop muted playsinline></video>
+      <p class="muted" id="orbitNote"></p>
+    </section>
+  </div>
+
+  <section class="panel hidden" id="frameSection">
+    <div class="row" style="justify-content:space-between">
+      <h2 style="font-size:16px;margin:0">Frames sent to AnySplat</h2>
+      <span class="muted" id="frameCount"></span>
+    </div>
+    <p class="muted">Highlighted frames are the ones AnySplat reconstructs from. Each one places its
+      pixels at its own depth guess; Gaussians that another view sees straight through are carved
+      away afterwards. <strong>Refine</strong> then sharpens the splat against every orbit frame at
+      full size. <strong>Subject only</strong> also cuts the background out of every frame.</p>
+    <div class="frames" id="frames"></div>
+    <p class="muted hidden" id="selectionError" style="color:var(--bad)"></p>
+    <div class="row" style="margin-top:14px">
+      <label class="field">Views
+        <select id="arc">
+          <option value="0" selected>Whole orbit</option>
+          <option value="30">Front, ±30°</option>
+          <option value="60">Front, ±60°</option>
+          <option value="90">Front, ±90°</option>
+        </select>
+      </label>
+      <label class="field">Frames <input type="number" id="count" min="2" max="137" value="32"></label>
+      <label class="field" title="Cut the subject out of every frame and keep only its Gaussians: no background, but no stray splats either">
+        <input type="checkbox" id="subject"> Subject only</label>
+      <label class="field" title="Optimise the splat against every orbit frame at full size: much sharper, a few minutes longer">
+        <input type="checkbox" id="refine" checked> Refine</label>
+      <button id="build">Build splat</button>
+      <a class="button secondary hidden" id="viewer" href="#">Open viewer</a>
+      <a class="button secondary hidden" id="download" href="#" download="splat.ply">Download .ply</a>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let runId = null;
+let pollTimer = null;
+let subjectSyncedFor = null;  // the run whose "Subject only" and "Refine" settings the checkboxes show
+
+function setRunId(id) {
+  runId = id;
+  location.hash = id;
+}
+
+async function api(path, options) {
+  const response = await fetch(path, options);
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.detail || `Request failed (${response.status})`);
+  return body;
+}
+
+function selectionQuery() {
+  const count = Math.max(2, Math.min(137, parseInt($("count").value, 10) || 32));
+  return `count=${count}&arc=${$("arc").value}`;
+}
+
+async function upload(file) {
+  const form = new FormData();
+  form.append("file", file);
+  const { id } = await api("/api/runs", { method: "POST", body: form });
+  setRunId(id);
+  $("run").classList.remove("hidden");
+  startPolling();
+}
+
+function render(run) {
+  $("run").classList.remove("hidden");
+  $("runId").textContent = run.id.slice(0, 8);
+  const statusText = {
+    uploaded: "Photo received", orbiting: "Making the H3 orbit", orbit_ready: "Orbit ready",
+    splatting: "Building the splat", splat_ready: "Splat ready", error: "Something went wrong",
+  }[run.status] || run.status;
+  $("status").textContent = statusText;
+  $("status").className = "status" + (run.status === "error" ? " error" : run.status === "splat_ready" ? " done" : "");
+  $("bar").style.width = `${run.progress || 0}%`;
+  $("message").textContent = run.error || run.message || "";
+  $("orbit").classList.toggle("hidden", !(run.status === "uploaded" || (run.status === "error" && !run.frames.length)));
+  const showLog = ["orbiting", "splatting", "error"].includes(run.status) && run.log && run.log.length;
+  $("log").classList.toggle("hidden", !showLog);
+  $("log").textContent = (run.log || []).join("\n");
+
+  $("intake").classList.add("hidden");
+  $("results").classList.remove("hidden");
+  $("photo").src = run.input_url;
+  if (run.orbit_video_url && $("video").getAttribute("src") !== run.orbit_video_url) {
+    $("video").src = run.orbit_video_url;
+  }
+  $("orbitNote").textContent = run.orbit_video_url ? "Look-around of the H3 orbit as rendered." : "";
+
+  const hasFrames = run.frames.length > 0;
+  $("frameSection").classList.toggle("hidden", !hasFrames);
+  if (hasFrames) {
+    $("frameCount").textContent = `${run.selected.length} of ${run.frames.length} orbit frames` +
+      ($("arc").value !== "0" ? ` (${run.arc_frames} in the arc)` : "");
+    $("selectionError").textContent = run.selection_error || "";
+    $("selectionError").classList.toggle("hidden", !run.selection_error);
+    const used = new Set(run.selected);
+    $("frames").innerHTML = run.frames.map((url, i) =>
+      `<img src="${url}" loading="lazy" alt="Orbit frame ${i}" class="${used.has(i) ? "used" : ""}">`).join("");
+  }
+  const ready = run.status === "orbit_ready" || run.status === "splat_ready" ||
+    (run.status === "error" && run.frames.length > 0);
+  $("build").disabled = !ready || !!run.selection_error;
+  $("build").textContent = run.status === "splat_ready" ? "Rebuild splat" : "Build splat";
+  if (subjectSyncedFor !== run.id) {
+    $("subject").checked = run.subject;
+    $("refine").checked = run.refine && run.can_refine;
+    subjectSyncedFor = run.id;
+  }
+  $("refine").disabled = !run.can_refine;
+  $("viewer").classList.toggle("hidden", !run.splat_url);
+  $("download").classList.toggle("hidden", !run.splat_url);
+  if (run.splat_url) {
+    $("viewer").href = `/viewer.html?run=${run.id}`;
+    $("download").href = run.splat_url;
+  }
+}
+
+async function refresh() {
+  if (!runId) return;
+  const run = await api(`/api/runs/${runId}?${selectionQuery()}`);
+  render(run);
+  const busy = run.status === "orbiting" || run.status === "splatting";
+  if (!busy) stopPolling();
+}
+
+function startPolling() {
+  stopPolling();
+  refresh().catch((error) => { $("message").textContent = error.message; });
+  pollTimer = setInterval(() => refresh().catch(() => {}), 1500);
+}
+
+function stopPolling() {
+  clearInterval(pollTimer);
+  pollTimer = null;
+}
+
+$("build").addEventListener("click", async () => {
+  $("build").disabled = true;
+  try {
+    const options = `subject=${$("subject").checked}&refine=${$("refine").checked}`;
+    await api(`/api/runs/${runId}/splat?${selectionQuery()}&${options}`, { method: "POST" });
+    startPolling();
+  } catch (error) {
+    $("message").textContent = error.message;
+    $("build").disabled = false;
+  }
+});
+
+$("orbit").addEventListener("click", async () => {
+  try {
+    await api(`/api/runs/${runId}/orbit`, { method: "POST" });
+    startPolling();
+  } catch (error) {
+    $("message").textContent = error.message;
+  }
+});
+
+$("arc").addEventListener("change", () => {
+  // A sensible default count for each range: about one frame every 5 degrees, at most 32.
+  const arc = Number($("arc").value);
+  $("count").value = arc ? Math.min(32, Math.round((2 * arc) / 5) + 1) : 32;
+  if (runId) refresh().catch(() => {});
+});
+$("count").addEventListener("change", () => { if (runId) refresh().catch(() => {}); });
+
+const drop = $("drop");
+drop.addEventListener("click", () => $("file").click());
+drop.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") $("file").click(); });
+$("file").addEventListener("change", () => { if ($("file").files[0]) upload($("file").files[0]).catch(alertError); });
+["dragenter", "dragover"].forEach((type) => drop.addEventListener(type, (event) => {
+  event.preventDefault(); drop.classList.add("over");
+}));
+["dragleave", "drop"].forEach((type) => drop.addEventListener(type, (event) => {
+  event.preventDefault(); drop.classList.remove("over");
+}));
+drop.addEventListener("drop", (event) => {
+  const file = event.dataTransfer.files[0];
+  if (file) upload(file).catch(alertError);
+});
+
+function alertError(error) {
+  $("intake").classList.remove("hidden");
+  $("message").textContent = error.message;
+}
+
+if (location.hash.length > 1) {
+  setRunId(location.hash.slice(1));
+  $("intake").classList.add("hidden");
+  startPolling();
+}
+</script>
+</body>
+</html>

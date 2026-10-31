@@ -1,0 +1,15 @@
+# Per-run photos, orbits and splats (photos may be someone else's; H3 outputs have licence terms)
+runs/
+
+# Third-party code cloned separately (see README.md)
+vendor/
+
+# Virtual environments
+.venv/
+.venv-refine/
+
+# Machine-specific settings (copy config.example.json)
+config.json
+
+__pycache__/
+*.pyc

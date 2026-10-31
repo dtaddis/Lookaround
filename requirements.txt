@@ -1,0 +1,40 @@
+# Install torch, torchvision, xformers and torch-scatter first from their CUDA 12.4 indexes
+# (see README.md), then the rest with: uv pip install -r requirements.txt
+torch==2.5.1
+torchvision==0.20.1
+xformers==0.0.28.post3
+torch-scatter==2.1.2
+
+# AnySplat
+numpy<2
+beartype
+colorspacious
+dacite
+e3nn
+einops
+gsplat
+huggingface-hub
+hydra-core
+jaxtyping
+lightning
+lpips
+moviepy==1.0.3
+omegaconf
+opencv-python
+pillow
+plyfile
+safetensors
+scikit-video
+scipy
+timm
+tqdm
+
+# Web app and orbit
+fastapi
+imageio-ffmpeg
+python-multipart
+uvicorn
+
+# Subject masks
+onnxruntime
+rembg
