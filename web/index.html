@@ -123,6 +123,7 @@
       <button id="build">Build splat</button>
       <a class="button secondary hidden" id="viewer" href="#">Open viewer</a>
       <a class="button secondary hidden" id="download" href="#" download="splat.ply">Download .ply</a>
+      <button class="button secondary" id="reroll" title="H3 varies a lot from seed to seed. Film a new orbit from another one (about 20 minutes); this run's frames and splat are replaced">New orbit</button>
     </div>
   </section>
 </main>
@@ -197,6 +198,7 @@ function render(run) {
   const ready = run.status === "orbit_ready" || run.status === "splat_ready" ||
     (run.status === "error" && run.frames.length > 0);
   $("build").disabled = !ready || !!run.selection_error;
+  $("reroll").disabled = !ready;
   $("build").textContent = run.status === "splat_ready" ? "Rebuild splat" : "Build splat";
   if (subjectSyncedFor !== run.id) {
     $("subject").checked = run.subject;
@@ -240,6 +242,16 @@ $("build").addEventListener("click", async () => {
   } catch (error) {
     $("message").textContent = error.message;
     $("build").disabled = false;
+  }
+});
+
+$("reroll").addEventListener("click", async () => {
+  if (!confirm("Film a new orbit from another seed? This run's frames and splat are replaced.")) return;
+  try {
+    await api(`/api/runs/${runId}/orbit?reroll=true`, { method: "POST" });
+    startPolling();
+  } catch (error) {
+    $("message").textContent = error.message;
   }
 });
 

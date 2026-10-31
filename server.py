@@ -7,7 +7,9 @@ splat/splat.ply with splat/splat.json, state.json and job.log.
 """
 
 import json
+import random
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -33,6 +35,8 @@ ORBIT_LINE = re.compile(r"\[\s*([\d.]+)%\]\s*(.*)")
 SPLAT_LINE = re.compile(r"PROGRESS (\d+) (.*)")
 DEFAULT_ARC = 0  # degrees each side of the photo; 0 means the whole orbit
 DEFAULT_COUNT = 32
+# H3's seed for a run's first orbit; "New orbit" rolls a random one.
+DEFAULT_SEED = 12345
 
 # H3 and AnySplat would fight over the card, so only one GPU job runs at a time.
 gpu_lock = threading.Lock()
@@ -99,6 +103,10 @@ def run_command(run: Path, command: list[str], on_line) -> int:
 def orbit_job(run: Path) -> None:
     state = read_state(run)
     write_state(run, status="orbiting", progress=0, message="Starting the H3 orbit", error=None)
+    # A new orbit (re-rolled with another seed) makes everything built from the old one stale.
+    for stale in ("orbit", "masks", "splat"):
+        shutil.rmtree(run / stale, ignore_errors=True)
+    (run / "orbit.mp4").unlink(missing_ok=True)
 
     def on_line(line: str) -> None:
         match = ORBIT_LINE.search(line)
@@ -110,6 +118,7 @@ def orbit_job(run: Path) -> None:
         [
             sys.executable, "-m", "lookaround.orbit", str(run / state["input"]),
             str(run / "orbit"), "--video", str(run / "orbit.mp4"),
+            "--seed", str(state.get("seed", DEFAULT_SEED)),
         ],  # fmt: skip
         on_line,
     )
@@ -242,8 +251,12 @@ def get_run(
 
 
 @app.post("/api/runs/{run_id}/orbit")
-def make_orbit(run_id: str):
-    start_job(run_dir(run_id), orbit_job)
+def make_orbit(run_id: str, reroll: bool = False):
+    """Make the run's orbit; with reroll, a new one from another seed (H3 varies a lot by seed)."""
+    run = run_dir(run_id)
+    if reroll:
+        write_state(run, seed=random.randrange(2**31))
+    start_job(run, orbit_job)
     return {"ok": True}
 
 

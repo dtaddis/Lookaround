@@ -17,7 +17,7 @@ lets you look around the result in a web browser or a VR headset. Everything run
 
 ## Run it
 
-Start ComfyUI, then double-click `lookaround.bat` (or run
+Start ComfyUI, then double-click `Lookaround.bat` (or run
 `.venv\Scripts\python.exe -m uvicorn server:app --host 127.0.0.1 --port 8000`) and open
 <http://127.0.0.1:8000>. Drop a photo: the orbit starts at once and takes about 20 minutes on
 an RTX 4090. When it is done, choose the views and press **Build splat** (about two minutes
@@ -98,10 +98,13 @@ far above or below the orbit shows needle-like Gaussians; the viewer limits the 
 
 ## Licences
 
+- Lookaround source: Apache-2.0 (see `LICENSE`).
 - MiniMax H3 weights and the orbit LoRA: the
   [MiniMax H3 Community License](https://huggingface.co/MiniMaxAI/MiniMax-H3), which excludes
   the EU, UK, South Korea and USA without separate authorisation from MiniMax, and reportedly
   forbids training other models on H3 outputs. Read it before publishing anything.
 - AnySplat: MIT. Some of its utility code comes from NAVER under CC BY-NC-SA 4.0
   (non-commercial).
-- `lookaround/orbit.py` and `lookaround/comfy.py` are adapted from HoloForge.
+- `lookaround/orbit.py` and `lookaround/comfy.py` are adapted from HoloForge (Apache-2.0).
+
+No model weights, photos or generated orbits are distributed with Lookaround.
