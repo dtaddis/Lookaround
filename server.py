@@ -34,7 +34,7 @@ RUN_ID = re.compile(r"[0-9a-f]{32}")
 ORBIT_LINE = re.compile(r"\[\s*([\d.]+)%\]\s*(.*)")
 SPLAT_LINE = re.compile(r"PROGRESS (\d+) (.*)")
 DEFAULT_ARC = 0  # degrees each side of the photo; 0 means the whole orbit
-DEFAULT_COUNT = 32
+DEFAULT_COUNT = 48  # scored better on held-out frames than 32 (and 24 falls apart)
 # H3's seed for a run's first orbit; "New orbit" rolls a random one.
 DEFAULT_SEED = 12345
 

@@ -115,7 +115,7 @@
           <option value="90">Front, ±90°</option>
         </select>
       </label>
-      <label class="field">Frames <input type="number" id="count" min="2" max="137" value="32"></label>
+      <label class="field">Frames <input type="number" id="count" min="2" max="137" value="48"></label>
       <label class="field" title="Cut the subject out of every frame and keep only its Gaussians: no background, but no stray splats either">
         <input type="checkbox" id="subject"> Subject only</label>
       <label class="field" title="Optimise the splat against every orbit frame at full size: much sharper, a few minutes longer">
@@ -147,7 +147,7 @@ async function api(path, options) {
 }
 
 function selectionQuery() {
-  const count = Math.max(2, Math.min(137, parseInt($("count").value, 10) || 32));
+  const count = Math.max(2, Math.min(137, parseInt($("count").value, 10) || 48));
   return `count=${count}&arc=${$("arc").value}`;
 }
 
@@ -265,9 +265,10 @@ $("orbit").addEventListener("click", async () => {
 });
 
 $("arc").addEventListener("change", () => {
-  // A sensible default count for each range: about one frame every 5 degrees, at most 32.
+  // A sensible default count for each range: about one frame every 5 degrees, at most 32, and
+  // 48 for the whole orbit.
   const arc = Number($("arc").value);
-  $("count").value = arc ? Math.min(32, Math.round((2 * arc) / 5) + 1) : 32;
+  $("count").value = arc ? Math.min(32, Math.round((2 * arc) / 5) + 1) : 48;
   if (runId) refresh().catch(() => {});
 });
 $("count").addEventListener("change", () => { if (runId) refresh().catch(() => {}); });

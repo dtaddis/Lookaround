@@ -3,7 +3,7 @@
 Run as: python -m lookaround.refine <splat_dir> <frames_dir> [--masks DIR] [--steps N]
 (in .venv-refine, which has a prebuilt gsplat; see README.md).
 
-AnySplat sees 32 frames at 448 px and predicts Gaussians in one pass, so the splat is soft.
+AnySplat sees 48 frames at 448 px and predicts Gaussians in one pass, so the splat is soft.
 This optimises those Gaussians photometrically, the usual 3DGS way, against all of the orbit's
 frames at full size. AnySplat only gave cameras for the frames it saw; the rest are
 interpolated between them, and every camera but the photo's gets a small learned correction

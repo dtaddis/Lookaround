@@ -38,7 +38,7 @@ survives.
 stays in view all the way round; where H3's camera passes behind something, the mask picks
 whatever is in front and a few flecks of it survive.
 
-**Why refine?** AnySplat sees 32 frames at 448 px and predicts the splat in one pass, so it is
+**Why refine?** AnySplat sees 48 frames at 448 px and predicts the splat in one pass, so it is
 soft. Refining optimises the Gaussians (with gsplat) against all ~150 frames at full size.
 AnySplat only gives cameras for the frames it saw, so the others are interpolated between them,
 and each camera except the photo's learns a small correction, since H3 doesn't turn at a
@@ -46,7 +46,8 @@ perfectly even speed. Degree-1 spherical harmonics let colours shift slightly wi
 which soaks up some of H3's drift. All the frames are filmed from one height, so looking from
 far above or below the orbit shows needle-like Gaussians.
 
-**Which views?** The whole orbit (32 frames) by default, for the full volume. The front arcs
+**Which views?** The whole orbit (48 frames) by default, for the full volume: on held-out
+frames 48 beat 32, and 24 fell apart. The front arcs
 (±30° to ±90° around the photo) are there for a front-only viewer.
 
 ## Set up
