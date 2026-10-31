@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lookaround Runs</title>
+<style>
+  :root {
+    --bg: #f6f5f2; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6a65;
+    --line: #dcd9d2; --accent: #2f6fdb; --accent-ink: #ffffff; --good: #2a8a4a; --bad: #b3261e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #161614; --panel: #201f1d; --ink: #ecebe7; --muted: #9b9a94;
+      --line: #3a3834; --accent: #6b9cf0; --accent-ink: #0d0d0c; --good: #5fc382; --bad: #f08a83;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #161614; --panel: #201f1d; --ink: #ecebe7; --muted: #9b9a94;
+    --line: #3a3834; --accent: #6b9cf0; --accent-ink: #0d0d0c; --good: #5fc382; --bad: #f08a83;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.45 system-ui, sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 48px; }
+  header { display: flex; flex-wrap: wrap; gap: 12px; align-items: baseline; justify-content: space-between; margin-bottom: 16px; }
+  h1 { font-size: 22px; margin: 0; }
+  a { color: var(--accent); }
+  input[type="search"] {
+    background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 8px;
+    padding: 7px 10px; font: inherit; width: 220px; max-width: 100%;
+  }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden;
+          display: flex; flex-direction: column; }
+  .card > a.thumb { display: block; }
+  .card img { width: 100%; aspect-ratio: 4 / 3; object-fit: contain; background: #000; display: block; }
+  .body { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 4px; flex: 1; }
+  .name { font-weight: 600; overflow-wrap: anywhere; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .status { font-size: 13px; font-weight: 600; }
+  .status.done { color: var(--good); }
+  .status.error { color: var(--bad); }
+  .bar { height: 6px; background: var(--line); border-radius: 99px; overflow: hidden; }
+  .bar > div { height: 100%; background: var(--accent); }
+  .actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: auto; padding-top: 8px; }
+  .button { background: var(--accent); color: var(--accent-ink); border-radius: 8px; padding: 6px 11px;
+            font-weight: 600; font-size: 13px; text-decoration: none; }
+  .button.secondary { background: transparent; color: var(--accent); border: 1px solid var(--line); }
+  .empty { color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>All runs</h1>
+    <div><input type="search" id="filter" placeholder="Filter by file name" aria-label="Filter by file name">
+      &nbsp;<a href="/">New photo</a></div>
+  </header>
+  <div class="grid" id="grid"></div>
+  <p class="empty" id="empty" hidden>No runs yet. <a href="/">Drop a photo</a> to start one.</p>
+</main>
+<script>
+const STATUS = {
+  uploaded: "Photo received", orbiting: "Making the orbit", orbit_ready: "Orbit ready",
+  splatting: "Building the splat", splat_ready: "Splat ready", error: "Failed",
+};
+const grid = document.getElementById("grid");
+const filter = document.getElementById("filter");
+let runs = [];
+
+function card(run) {
+  const busy = run.status === "orbiting" || run.status === "splatting";
+  const el = document.createElement("article");
+  el.className = "card";
+  const date = new Date(run.created * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  const details = run.has_splat && run.gaussians
+    ? `${run.gaussians.toLocaleString()} Gaussians${run.refined_steps ? `, refined ${run.refined_steps.toLocaleString()} steps` : ", not refined"}${run.subject ? ", subject only" : ""}`
+    : "";
+  el.innerHTML = `
+    <a class="thumb" href="/#${run.id}"><img loading="lazy" alt=""></a>
+    <div class="body">
+      <div class="name"></div>
+      <div class="muted">${date}</div>
+      <div class="status ${run.status === "error" ? "error" : run.status === "splat_ready" ? "done" : ""}"></div>
+      ${busy ? `<div class="bar"><div style="width:${run.progress}%"></div></div><div class="muted msg"></div>` : ""}
+      <div class="muted">${details}</div>
+      <div class="actions">
+        ${run.has_splat ? `<a class="button" href="/viewer.html?run=${run.id}">View splat</a>` : ""}
+        <a class="button secondary" href="/#${run.id}">Open run</a>
+        ${run.has_splat ? `<a class="button secondary" href="/runs/${run.id}/splat/splat.ply" download="${run.id}.ply">.ply</a>` : ""}
+      </div>
+    </div>`;
+  el.querySelector("img").src = run.input_url;
+  el.querySelector(".name").textContent = run.original || run.id;
+  el.querySelector(".status").textContent = STATUS[run.status] || run.status;
+  if (busy) el.querySelector(".msg").textContent = run.message;
+  return el;
+}
+
+function render() {
+  const term = filter.value.trim().toLowerCase();
+  const shown = runs.filter((r) => !term || (r.original || "").toLowerCase().includes(term) || r.id.startsWith(term));
+  grid.replaceChildren(...shown.map(card));
+  document.getElementById("empty").hidden = runs.length > 0;
+}
+
+async function load() {
+  const latest = await fetch("/api/runs").then((r) => r.json());
+  if (JSON.stringify(latest) !== JSON.stringify(runs)) {
+    runs = latest;
+    render();
+  }
+  // Keep running jobs' progress current.
+  if (runs.some((r) => r.status === "orbiting" || r.status === "splatting")) setTimeout(load, 5000);
+}
+
+filter.addEventListener("input", render);
+load();
+</script>
+</body>
+</html>

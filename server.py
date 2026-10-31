@@ -238,6 +238,32 @@ async def create_run(file: UploadFile = File(...)):
     return {"id": run_id}
 
 
+@app.get("/api/runs")
+def list_runs():
+    """Every run, newest first, for the All runs page."""
+    runs = []
+    for run in RUNS.iterdir():
+        state = read_state(run)
+        if not RUN_ID.fullmatch(run.name) or "input" not in state:
+            continue
+        meta_path = run / "splat" / "splat.json"
+        meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
+        runs.append({
+            "id": run.name,
+            "original": state.get("original"),
+            "created": (run / state["input"]).stat().st_mtime,
+            "status": state.get("status"),
+            "progress": state.get("progress", 0),
+            "message": state.get("message", ""),
+            "input_url": url_for(run, state["input"]),
+            "has_splat": (run / "splat" / "splat.ply").exists(),
+            "gaussians": meta.get("gaussians"),
+            "refined_steps": meta.get("refined_steps"),
+            "subject": bool(state.get("subject")),
+        })  # fmt: skip
+    return sorted(runs, key=lambda r: r["created"], reverse=True)
+
+
 @app.get("/api/runs/{run_id}")
 def get_run(
     run_id: str,

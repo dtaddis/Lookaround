@@ -31,7 +31,8 @@ You need [Git](https://git-scm.com/download/win); the installer gets everything 
    you close the window.
 
 Drop a photo: the orbit starts at once. When it is done, choose the views and press
-**Build splat** (about three minutes with refining), then **Open viewer**.
+**Build splat** (about three minutes with refining), then **Open viewer**. **All runs**
+(`/runs.html`) lists every run, newest first, to reopen or view.
 
 **Why carve?** AnySplat places every pixel of every view at that view's own depth guess. Across
 an H3 orbit the guesses don't quite agree (and H3 redraws the background as it turns), so each
