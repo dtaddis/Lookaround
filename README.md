@@ -11,7 +11,7 @@ lets you look around the result in a web browser or a VR headset. Everything run
    through are then carved away (`lookaround/carve.py`); optionally, only the subject is kept
    (`lookaround/subject.py`).
 3. **Refine.** The splat is optimised against every orbit frame at full size, the usual 3DGS
-   way (`lookaround/refine.py`, about a minute). This is what makes it sharp.
+   way (`lookaround/refine.py`, about two minutes). This is what makes it sharp.
 4. **View.** A three.js + Spark viewer opens on the photo's own viewpoint (`web/viewer.html`)
    and lets you move freely: drag to turn any way round the subject (round the window's edge
    to roll), right-drag to pan, scroll to move in, WASD/QE to fly, and R to glide back to the
@@ -31,7 +31,7 @@ You need [Git](https://git-scm.com/download/win); the installer gets everything 
    you close the window.
 
 Drop a photo: the orbit starts at once. When it is done, choose the views and press
-**Build splat** (about two minutes with refining), then **Open viewer**.
+**Build splat** (about three minutes with refining), then **Open viewer**.
 
 **Why carve?** AnySplat places every pixel of every view at that view's own depth guess. Across
 an H3 orbit the guesses don't quite agree (and H3 redraws the background as it turns), so each
@@ -47,7 +47,11 @@ stays in view all the way round; where H3's camera passes behind something, the 
 whatever is in front and a few flecks of it survive.
 
 **Why refine?** AnySplat sees 48 frames at 448 px and predicts the splat in one pass, so it is
-soft. Refining optimises the Gaussians (with gsplat) against all ~150 frames at full size.
+soft. Refining optimises the Gaussians (with gsplat) against all ~150 frames at full size,
+for 8,000 steps with gsplat's MCMC strategy: rather than splitting and culling Gaussians, it
+keeps a fixed budget (1.5 times AnySplat's) and moves weak ones to where they are needed. On
+held-out orbit frames this beat the usual densification on every test photo. Gaussians it left
+nearly transparent are dropped when the splat is saved.
 AnySplat only gives cameras for the frames it saw, so the others are interpolated between them,
 and each camera except the photo's learns a small correction, since H3 doesn't turn at a
 perfectly even speed. Degree-1 spherical harmonics let colours shift slightly with the view,

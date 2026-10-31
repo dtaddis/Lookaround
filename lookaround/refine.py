@@ -5,13 +5,15 @@ Run as: python -m lookaround.refine <splat_dir> <frames_dir> [--masks DIR] [--st
 
 AnySplat sees 48 frames at 448 px and predicts Gaussians in one pass, so the splat is soft.
 This optimises those Gaussians photometrically, the usual 3DGS way, against all of the orbit's
-frames at full size. AnySplat only gave cameras for the frames it saw; the rest are
+frames at full size, with gsplat's MCMC strategy: a fixed budget of Gaussians that are moved,
+not split and culled, which scored best on held-out orbit frames. AnySplat only gave cameras for the frames it saw; the rest are
 interpolated between them, and every camera but the photo's gets a small learned correction
 because H3 doesn't turn at a perfectly even speed. Spherical harmonics of degree 1 let a
 Gaussian's colour change a little with the view, which absorbs some of H3's drift.
 
 With --masks (the subject masks, one per orbit frame) the background is trained to be empty.
-Rewrites splat_dir/splat.ply, keeping AnySplat's version as splat_anysplat.ply, and prints
+Gaussians left nearly transparent are dropped on saving: MCMC keeps them as spares, and they
+can be half the file. Rewrites splat_dir/splat.ply, keeping AnySplat's version as splat_anysplat.ply, and prints
 "PROGRESS <percent> <message>" lines.
 """
 
@@ -26,7 +28,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from gsplat import rasterization
-from gsplat.strategy import DefaultStrategy
+from gsplat.strategy import MCMCStrategy
 from PIL import Image
 from plyfile import PlyData, PlyElement
 
@@ -41,6 +43,13 @@ POSE_LEARNING_RATE = 3e-5
 SSIM_WEIGHT = 0.2
 # Weight of the alpha-matches-mask term when keeping only the subject.
 MASK_WEIGHT = 0.5
+# MCMC: at most this many times AnySplat's Gaussians, and light pressure towards fewer, smaller
+# ones (as in the MCMC paper). Scored on held-out frames of three runs.
+MCMC_CAP = 1.5
+OPACITY_REG = 0.01
+SCALE_REG = 0.01
+# Saved Gaussians below this opacity are dropped: they don't change the picture.
+MIN_OPACITY = 0.01
 SH_C0 = 0.28209479177387814
 
 
@@ -190,7 +199,7 @@ def main() -> None:
     parser.add_argument("splat_dir", type=Path)
     parser.add_argument("frames_dir", type=Path)
     parser.add_argument("--masks", type=Path, help="Subject masks: train the background empty")
-    parser.add_argument("--steps", type=int, default=4000)
+    parser.add_argument("--steps", type=int, default=8000)
     parser.add_argument("--sh-degree", type=int, default=SH_DEGREE)
     parser.add_argument("--pose-lr", type=float, default=POSE_LEARNING_RATE,
                         help="Learning rate of the camera corrections (0 turns them off)")  # fmt: skip
@@ -259,7 +268,7 @@ def main() -> None:
         image, alpha, info = rasterization(
             params["means"], F.normalize(params["quats"], dim=-1), params["scales"].exp(),
             params["opacities"].sigmoid(), colours, viewmat, ks[view : view + 1], width, height,
-            sh_degree=sh_degree, absgrad=True, packed=False,
+            sh_degree=sh_degree, packed=False,
         )  # fmt: skip
         return image[0].permute(2, 0, 1)[None], alpha, info
 
@@ -269,13 +278,11 @@ def main() -> None:
             return target, None
         matte = masks[view][None, None].float() / 255
         return target * matte, matte
-    strategy = DefaultStrategy(
-        refine_start_iter=300, refine_stop_iter=int(args.steps * 0.6), refine_every=100,
-        reset_every=args.steps * 10, absgrad=True, grow_grad2d=0.0008, verbose=False,
-    )  # fmt: skip
-    strategy.check_sanity(params, optimizers)
-    state = strategy.initialize_state(scene_scale=scene_scale)
     start_count = len(params["means"])
+    strategy = MCMCStrategy(cap_max=int(start_count * MCMC_CAP), refine_start_iter=300,
+                            refine_stop_iter=int(args.steps * 0.6), refine_every=100)  # fmt: skip
+    strategy.check_sanity(params, optimizers)
+    state = strategy.initialize_state()
 
     def score(label: str, sh_degree: int) -> None:
         """Print the mean PSNR and SSIM over the held-out frames."""
@@ -303,6 +310,8 @@ def main() -> None:
         loss = (1 - SSIM_WEIGHT) * (image - target).abs().mean() + SSIM_WEIGHT * (1 - ssim(image, target))
         if matte is not None:
             loss = loss + MASK_WEIGHT * (alpha[0, ..., 0] - matte[0, 0]).abs().mean()
+        loss = (loss + OPACITY_REG * params["opacities"].sigmoid().mean()
+                + SCALE_REG * params["scales"].exp().mean())  # fmt: skip
 
         strategy.step_pre_backward(params, optimizers, state, step, info)
         loss.backward()
@@ -310,13 +319,18 @@ def main() -> None:
             optimizer.step()
             optimizer.zero_grad(set_to_none=True)
         means_decay.step()
-        strategy.step_post_backward(params, optimizers, state, step, info, packed=False)
+        strategy.step_post_backward(params, optimizers, state, step, info,
+                                    lr=optimizers["means"].param_groups[0]["lr"])  # fmt: skip
 
         if step % 100 == 0 or step == args.steps - 1:
             progress(5 + int(90 * (step + 1) / args.steps),
                      f"Refining: step {step + 1:,} of {args.steps:,}, "
                      f"{len(params['means']):,} Gaussians, loss {loss.item():.3f}")  # fmt: skip
 
+    with torch.no_grad():
+        visible = params["opacities"].sigmoid() >= MIN_OPACITY
+        for name in params:
+            params[name] = torch.nn.Parameter(params[name][visible])
     if held_out:
         score("after refining", args.sh_degree)
 
