@@ -12,8 +12,10 @@ lets you look around the result in a web browser or a VR headset. Everything run
    (`lookaround/subject.py`).
 3. **Refine.** The splat is optimised against every orbit frame at full size, the usual 3DGS
    way (`lookaround/refine.py`, about a minute). This is what makes it sharp.
-4. **View.** A three.js + Spark viewer opens on the photo's own viewpoint and orbits the subject
-   (`web/viewer.html`), with a WebXR button for headsets.
+4. **View.** A three.js + Spark viewer opens on the photo's own viewpoint (`web/viewer.html`)
+   and lets you move freely: drag to turn any way round the subject (round the window's edge
+   to roll), right-drag to pan, scroll to move in, WASD/QE to fly, and R to glide back to the
+   photo. A WebXR button opens it in a headset.
 
 ## Run it
 
@@ -42,7 +44,7 @@ AnySplat only gives cameras for the frames it saw, so the others are interpolate
 and each camera except the photo's learns a small correction, since H3 doesn't turn at a
 perfectly even speed. Degree-1 spherical harmonics let colours shift slightly with the view,
 which soaks up some of H3's drift. All the frames are filmed from one height, so looking from
-far above or below the orbit shows needle-like Gaussians; the viewer limits the tilt to ±30°.
+far above or below the orbit shows needle-like Gaussians.
 
 **Which views?** The whole orbit (32 frames) by default, for the full volume. The front arcs
 (±30° to ±90° around the photo) are there for a front-only viewer.

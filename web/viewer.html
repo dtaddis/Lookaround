@@ -41,7 +41,7 @@
 </div>
 <script type="module">
   import * as THREE from "three";
-  import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+  import { TrackballControls } from "three/addons/controls/TrackballControls.js";
   import { VRButton } from "three/addons/webxr/VRButton.js";
   import { SparkRenderer, SplatMesh } from "@sparkjsdev/spark";
 
@@ -105,35 +105,81 @@
   camera.position.set(0, 0, 0);
   camera.updateProjectionMatrix();
 
-  const controls = new OrbitControls(camera, renderer.domElement);
+  // Free movement in all six degrees: the trackball turns the view any way round the target
+  // (over the top, and rolling when you drag around the edge of the window), right-drag pans,
+  // the wheel moves in and out, and the keyboard flies.
+  const controls = new TrackballControls(camera, renderer.domElement);
   controls.target.copy(pivot);
-  controls.enableDamping = true;
-  controls.minDistance = radius * 0.1;
-  controls.maxDistance = radius * 6;
-  controls.zoomSpeed = 0.6;
-  controls.rotateSpeed = 0.5;
-
-  // Keep the view within the arc the input frames covered (plus a margin): beyond it the
-  // splat has nothing to show. ?free=1 lifts the limit.
-  if (meta && !params.get("free")) {
-    const spans = meta.cameras.map((cam) => {
-      const position = new THREE.Vector3(cam.c2w[0][3], cam.c2w[1][3], cam.c2w[2][3]).applyMatrix4(splat.matrixWorld);
-      return Math.abs(Math.atan2(position.x - pivot.x, position.z - pivot.z));
-    });
-    const reach = Math.min(Math.PI, Math.max(...spans) + THREE.MathUtils.degToRad(15));
-    controls.minAzimuthAngle = -reach;
-    controls.maxAzimuthAngle = reach;
-    controls.minPolarAngle = THREE.MathUtils.degToRad(60);
-    controls.maxPolarAngle = THREE.MathUtils.degToRad(120);
-  }
+  controls.rotateSpeed = 2.5;
+  controls.zoomSpeed = 1.2;
+  controls.panSpeed = 0.6;
+  controls.dynamicDampingFactor = 0.15;
+  controls.minDistance = radius * 0.02;
+  controls.maxDistance = radius * 20;
+  controls.keys = [null, null, null];  // its A/S/D drag modifiers would clash with flying
   controls.update();
-  controls.saveState();
-  $("home").addEventListener("click", () => controls.reset());
-  window.addEventListener("keydown", (event) => { if (event.key === "r" || event.key === "R") controls.reset(); });
+  // reset() returns to the state saved when the controls were made, before the target was
+  // set: make that the photo view. (These fields are internal to three 0.180, pinned above.)
+  controls._target0.copy(controls.target);
+  controls._position0.copy(camera.position);
+  controls._up0.copy(camera.up);
+  const home = { position: camera.position.clone(), quaternion: camera.quaternion.clone(), target: pivot.clone() };
+
+  // Flying: W/S forward and back, A/D left and right, Q/E down and up, all relative to the
+  // view, moving the target along with the camera. Shift goes three times as fast.
+  const FLY_KEYS = { KeyW: [0, 0, -1], KeyS: [0, 0, 1], KeyA: [-1, 0, 0], KeyD: [1, 0, 0], KeyQ: [0, -1, 0], KeyE: [0, 1, 0] };
+  const held = new Set();
+  window.addEventListener("keydown", (event) => {
+    if (event.code in FLY_KEYS) held.add(event.code);
+    if (event.code === "ShiftLeft" || event.code === "ShiftRight") held.add("Shift");
+    if (event.code === "KeyR" || event.code === "Home") flyHome();
+  });
+  window.addEventListener("keyup", (event) => {
+    held.delete(event.code);
+    if (event.code === "ShiftLeft" || event.code === "ShiftRight") held.delete("Shift");
+  });
+  window.addEventListener("blur", () => held.clear());
+
+  function fly(seconds) {
+    const move = new THREE.Vector3();
+    for (const code of held) if (FLY_KEYS[code]) move.add(new THREE.Vector3(...FLY_KEYS[code]));
+    if (!move.lengthSq()) return;
+    const speed = radius * 0.6 * (held.has("Shift") ? 3 : 1);
+    move.normalize().multiplyScalar(speed * seconds).applyQuaternion(camera.quaternion);
+    camera.position.add(move);
+    controls.target.add(move);
+  }
+
+  // Back to the photo view: an eased one-second glide, then an exact reset (which also stops
+  // any trackball spin still coasting).
+  const TWEEN_SECONDS = 1;
+  let tween = null;
+  const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);  // ease in-out cubic
+  function flyHome() {
+    if (tween) return;
+    controls.enabled = false;
+    tween = { start: performance.now(), position: camera.position.clone(),
+              quaternion: camera.quaternion.clone(), target: controls.target.clone() };
+  }
+  function stepTween(now) {
+    const t = Math.min(1, (now - tween.start) / (TWEEN_SECONDS * 1000));
+    const k = ease(t);
+    camera.position.lerpVectors(tween.position, home.position, k);
+    camera.quaternion.slerpQuaternions(tween.quaternion, home.quaternion, k);
+    controls.target.lerpVectors(tween.target, home.target, k);
+    camera.up.set(0, 1, 0).applyQuaternion(camera.quaternion);
+    if (t === 1) {
+      tween = null;
+      controls.reset();
+      controls.enabled = true;
+    }
+  }
+  $("home").addEventListener("click", flyHome);
 
   if (meta) {
     $("details").textContent = `${meta.gaussians.toLocaleString()} Gaussians from ${meta.frames.length} orbit frames. ` +
-      "Drag to orbit, scroll to zoom, right-drag to pan, R for the photo view.";
+      "Drag to turn (round the edge to roll), right-drag to pan, scroll to move in, " +
+      "WASD/QE to fly (Shift for faster), R for the photo view.";
   }
 
   splat.initialized
@@ -152,8 +198,17 @@
     renderer.setSize(window.innerWidth, window.innerHeight);
   });
 
-  renderer.setAnimationLoop(() => {
-    controls.update();
+  const clock = new THREE.Clock();
+  renderer.setAnimationLoop((now) => {
+    const seconds = Math.min(clock.getDelta(), 0.1);
+    if (!renderer.xr.isPresenting) {
+      if (tween) {
+        stepTween(now);
+      } else {
+        fly(seconds);
+        controls.update();
+      }
+    }
     renderer.render(scene, camera);
   });
 </script>
