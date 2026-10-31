@@ -88,12 +88,9 @@ the photo always stays, as the splat is anchored to it. The front arcs
   uv pip install --python .venv-refine\Scripts\python.exe "https://github.com/nerfstudio-project/gsplat/releases/download/v1.5.3/gsplat-1.5.3%2Bpt24cu124-cp310-cp310-win_amd64.whl" "numpy<2" plyfile pillow packaging setuptools
   ```
 
-- **`config.json`** (optional; copy `config.example.json`): `comfy_url`, and
-  `gpu_request_flag` / `gpu_go_flag` to share
-  the GPU with another pipeline. With the flags set, Lookaround creates the request file before
-  each orbit and each splat build, waits for the go file, and deletes the request file
-  afterwards. Before a splat build it also asks ComfyUI to unload its models, which it
-  otherwise keeps in VRAM.
+- **`config.json`** (optional; copy `config.example.json`): `comfy_url`, if ComfyUI isn't at
+  <http://127.0.0.1:8188>. Before a splat build, Lookaround asks ComfyUI to unload its
+  models, which it otherwise keeps in VRAM.
 
 ## Each run
 

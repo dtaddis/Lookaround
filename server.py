@@ -6,6 +6,7 @@ Each run lives in runs/<id>/: the photo (input.*), orbit/frame_NNNN.png, orbit.m
 splat/splat.ply with splat/splat.json, state.json and job.log.
 """
 
+import contextlib
 import json
 import random
 import re
@@ -20,7 +21,7 @@ from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.staticfiles import StaticFiles
 
 from lookaround.comfy import ComfyClient, ComfyError
-from lookaround.config import comfy_url, gpu_claim
+from lookaround.config import comfy_url
 from lookaround.frames import arc_frame_count, check_custom, distinct_frames, pick_arc, pick_indices
 
 ROOT = Path(__file__).resolve().parent
@@ -41,7 +42,15 @@ DEFAULT_SEED = 12345
 # H3 and AnySplat would fight over the card, so only one GPU job runs at a time.
 gpu_lock = threading.Lock()
 RUNS.mkdir(exist_ok=True)
-app = FastAPI(title="Lookaround")
+
+
+@contextlib.asynccontextmanager
+async def lifespan(app: FastAPI):
+    mark_interrupted()
+    yield
+
+
+app = FastAPI(title="Lookaround", lifespan=lifespan)
 
 
 # --- run folders and state -------------------------------------------------------------
@@ -62,6 +71,14 @@ def write_state(run: Path, **updates) -> None:
     state = read_state(run)
     state.update(updates)
     (run / "state.json").write_text(json.dumps(state, indent=2), encoding="utf-8")
+
+
+def mark_interrupted() -> None:
+    """Jobs run inside the server, so any run still marked busy at startup was cut off."""
+    for run in RUNS.iterdir():
+        if read_state(run).get("status") in ("orbiting", "splatting"):
+            message = "Interrupted: the server stopped before this finished. Start it again."
+            write_state(run, status="error", message=message, error=message)
 
 
 def orbit_frames(run: Path) -> list[Path]:
@@ -136,7 +153,7 @@ def orbit_job(run: Path) -> None:
 def splat_job(run: Path) -> None:
     state = read_state(run)
     refine = state.get("refine") and REFINE_PYTHON.exists()
-    write_state(run, status="splatting", progress=0, message="Waiting for the GPU", error=None)
+    write_state(run, status="splatting", progress=0, message="Starting AnySplat", error=None)
     subject_only = ["--subject-masks", str(run / "masks")] if state.get("subject") else []
 
     def stage(start: int, end: int):
@@ -150,28 +167,24 @@ def splat_job(run: Path) -> None:
 
         return on_line
 
-    def on_wait(seconds: float) -> None:
-        write_state(run, message=f"Waiting for the GPU to be handed over ({seconds:.0f} s)")
-
-    with gpu_claim(on_wait=on_wait):
-        try:
-            ComfyClient(comfy_url()).free_memory()  # ComfyUI keeps models in VRAM between jobs
-        except ComfyError:
-            pass  # not running, so it holds nothing
-        command = [
-            sys.executable, "-m", "lookaround.splat", str(run / "orbit"), str(run / "splat"),
-            "--indices", ",".join(map(str, state["indices"])), *subject_only,
-        ]  # fmt: skip
-        code = run_command(run, command, stage(0, 30 if refine else 100))
+    try:
+        ComfyClient(comfy_url()).free_memory()  # ComfyUI keeps models in VRAM between jobs
+    except ComfyError:
+        pass  # not running, so it holds nothing
+    command = [
+        sys.executable, "-m", "lookaround.splat", str(run / "orbit"), str(run / "splat"),
+        "--indices", ",".join(map(str, state["indices"])), *subject_only,
+    ]  # fmt: skip
+    code = run_command(run, command, stage(0, 30 if refine else 100))
+    if code != 0:
+        raise RuntimeError(f"AnySplat failed (exit code {code}). See job.log in the run folder.")
+    if refine:
+        masks = ["--masks", str(run / "masks")] if state.get("subject") else []
+        command = [str(REFINE_PYTHON), "-m", "lookaround.refine", str(run / "splat"),
+                   str(run / "orbit"), *masks]  # fmt: skip
+        code = run_command(run, command, stage(30, 100))
         if code != 0:
-            raise RuntimeError(f"AnySplat failed (exit code {code}). See job.log in the run folder.")
-        if refine:
-            masks = ["--masks", str(run / "masks")] if state.get("subject") else []
-            command = [str(REFINE_PYTHON), "-m", "lookaround.refine", str(run / "splat"),
-                       str(run / "orbit"), *masks]  # fmt: skip
-            code = run_command(run, command, stage(30, 100))
-            if code != 0:
-                raise RuntimeError(f"Refining failed (exit code {code}). See job.log in the run folder.")
+            raise RuntimeError(f"Refining failed (exit code {code}). See job.log in the run folder.")
     write_state(run, status="splat_ready", progress=100, message="Splat ready")
 
 

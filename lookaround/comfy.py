@@ -103,31 +103,6 @@ class ComfyClient:
         subfolder = result.get("subfolder") or ""
         return f"{subfolder}/{result['name']}" if subfolder else result["name"]
 
-    def wait_for_idle(
-        self,
-        stable_seconds: float,
-        *,
-        poll_seconds: float = 10.0,
-        on_busy: Callable[[float], None] | None = None,
-    ) -> None:
-        """Yield to other users of the server: return once its queue has stayed empty
-        (nothing running or pending) for stable_seconds."""
-        if stable_seconds <= 0:
-            return
-        started = time.monotonic()
-        idle_since: float | None = None
-        while True:
-            queue = self._request("/queue")
-            if queue.get("queue_running") or queue.get("queue_pending"):
-                idle_since = None
-                if on_busy:
-                    on_busy(time.monotonic() - started)
-            else:
-                idle_since = idle_since or time.monotonic()
-                if time.monotonic() - idle_since >= stable_seconds:
-                    return
-            time.sleep(poll_seconds)
-
     def queue(self, graph: dict) -> str:
         result = self._request("/prompt", {"prompt": graph, "client_id": self.client_id})
         if result.get("node_errors"):

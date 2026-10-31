@@ -23,7 +23,7 @@ import imageio_ffmpeg
 from PIL import Image
 
 from lookaround.comfy import ComfyClient, save_frames
-from lookaround.config import comfy_url, gpu_claim
+from lookaround.config import comfy_url
 
 H3_FPS = 24
 H3_DIFFUSION_GGUF = "MiniMax-H3-FL2VA-Pruned-Q5_K_M.gguf"
@@ -120,9 +120,6 @@ class OrbitSettings:
     pdd: bool = False
     seed: int = 12345
     server: str = "http://127.0.0.1:8188"
-    # Share the ComfyUI server politely: only submit after its queue has been empty this
-    # long, so another pipeline that submits job after job keeps the GPU.
-    idle_seconds: float = 180.0
 
 
 def h3_valid_length(frame_count: int) -> int:
@@ -269,7 +266,6 @@ def render_orbit(
     *,
     name: str = "orbit",
     on_wait: Callable[[float], None] | None = None,
-    on_busy: Callable[[float], None] | None = None,
 ) -> list[Image.Image]:
     """Render the H3 orbit clip for one photograph into directory as frame_NNNN.png."""
     width, height = h3_size(source.width / source.height, settings.target_pixels)
@@ -286,7 +282,6 @@ def render_orbit(
     client.require_choice("VAELoader", "vae_name", settings.vae_name)
     if settings.lora:
         client.require_choice("LoraLoaderModelOnly", "lora_name", settings.lora)
-    client.wait_for_idle(settings.idle_seconds, on_busy=on_busy)
     image_name = client.upload_image(conditioning, f"lookaround_{name}.png")
     graph = build_graph(image_name, width, height, length, prompt, settings, f"lookaround/{name}")
     prompt_id = client.queue(graph)
@@ -314,12 +309,11 @@ def main() -> None:
     parser.add_argument("--frames", type=int, default=None, help="Clip length (17k+5)")
     parser.add_argument("--seed", type=int, default=12345)
     parser.add_argument("--server", default=comfy_url())
-    parser.add_argument("--idle-seconds", type=float, default=0.0)
     args = parser.parse_args()
 
     source = Image.open(args.photo).convert("RGB")
     settings = OrbitSettings(
-        frames=args.frames, seed=args.seed, server=args.server, idle_seconds=args.idle_seconds,
+        frames=args.frames, seed=args.seed, server=args.server,
     )  # fmt: skip
     started = time.monotonic()
     last_minute = -1
@@ -335,19 +329,8 @@ def main() -> None:
             percent = min(80.0, 5.0 + 75.0 * elapsed / EXPECTED_SECONDS)
             progress(percent, f"H3 is rendering the orbit ({minute} min)")
 
-    def on_busy(elapsed: float) -> None:
-        progress(2.0, f"Waiting for ComfyUI to be idle ({int(elapsed)} s)")
-
-    def on_handover(elapsed: float) -> None:
-        if int(elapsed) % 10 < 2:
-            progress(1.0, f"Waiting for the GPU to be handed over ({int(elapsed)} s)")
-
-    progress(1.0, "Asking for the GPU")
-    with gpu_claim(on_wait=on_handover):
-        progress(2.0, "Sending the photo to ComfyUI")
-        frames = render_orbit(
-            source, args.out_dir, settings, on_wait=on_wait, on_busy=on_busy,
-        )  # fmt: skip
+    progress(2.0, "Sending the photo to ComfyUI")
+    frames = render_orbit(source, args.out_dir, settings, on_wait=on_wait)
     if args.video:
         progress(90.0, "Encoding the orbit video")
         write_video(args.out_dir, args.video)
