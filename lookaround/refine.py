@@ -30,7 +30,7 @@ from gsplat.strategy import DefaultStrategy
 from PIL import Image
 from plyfile import PlyData, PlyElement
 
-from lookaround.frames import DROP_TAIL
+from lookaround.frames import distinct_frames
 
 SH_DEGREE = 1
 # Adam learning rates, as in gsplat's simple_trainer (means scale with the scene).
@@ -81,17 +81,19 @@ def slerp(a: np.ndarray, b: np.ndarray, t: float) -> np.ndarray:
     return (math.sin((1 - t) * angle) * a + math.sin(t * angle) * b) / math.sin(angle)
 
 
-def orbit_cameras(meta: dict, total: int) -> list[dict]:
-    """A camera for every usable orbit frame, interpolating between the ones AnySplat saw.
+def orbit_cameras(meta: dict, distinct: list[int]) -> list[dict]:
+    """A camera for each distinct orbit frame, interpolating between the ones AnySplat saw.
 
-    The orbit is a loop: frame total-1 repeats frame 0, so the frames after the last known one
-    are interpolated towards frame 0's camera.
+    Frames are spaced by their place among the distinct frames, so pauses don't count. The
+    orbit is a loop back to the photo, so the frames after the last known one are interpolated
+    towards frame 0's camera.
     """
-    period = total - 1
-    known = {int(name[6:10]): camera for name, camera in zip(meta["frames"], meta["cameras"])}
+    period = len(distinct)
+    known = {distinct.index(int(name[6:10])): camera
+             for name, camera in zip(meta["frames"], meta["cameras"])}  # fmt: skip
     order = sorted(known)
     cameras = []
-    for frame in range(total - DROP_TAIL):
+    for frame in range(period):
         if frame in known:
             cameras.append(known[frame])
             continue
@@ -202,8 +204,9 @@ def main() -> None:
     progress(1, "Loading the splat and the orbit")
     meta = json.loads((args.splat_dir / "splat.json").read_text(encoding="utf-8"))
     every_frame = sorted(args.frames_dir.glob("frame_*.png"))
-    frames = every_frame[: len(every_frame) - DROP_TAIL]
-    cameras = orbit_cameras(meta, len(every_frame))
+    distinct = distinct_frames(args.frames_dir)
+    frames = [every_frame[i] for i in distinct]
+    cameras = orbit_cameras(meta, distinct)
     width, height = Image.open(frames[0]).size
     images = torch.stack([torch.from_numpy(np.asarray(Image.open(f).convert("RGB"))) for f in frames])
     images = images.to(device)  # uint8, [V, H, W, 3]

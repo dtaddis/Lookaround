@@ -21,7 +21,7 @@ from fastapi.staticfiles import StaticFiles
 
 from lookaround.comfy import ComfyClient, ComfyError
 from lookaround.config import comfy_url, gpu_claim
-from lookaround.frames import arc_frame_count, pick_arc, pick_indices
+from lookaround.frames import arc_frame_count, check_custom, distinct_frames, pick_arc, pick_indices
 
 ROOT = Path(__file__).resolve().parent
 # Refining needs gsplat's compiled kernels, which come prebuilt only for Python 3.10, so it
@@ -72,9 +72,15 @@ def url_for(run: Path, relative: str) -> str:
     return f"/runs/{run.name}/{relative}"
 
 
-def select_frames(total: int, arc: float, count: int) -> list[int]:
-    """Frame numbers for AnySplat: a front arc around the photo, or the whole orbit."""
-    return pick_arc(total, arc, count) if arc else pick_indices(total, count)
+def select_frames(distinct: list[int], arc: float, count: int, custom: str | None) -> list[int]:
+    """Frame numbers for AnySplat: hand-picked, a front arc around the photo, or the whole orbit."""
+    if custom is not None:
+        try:
+            indices = [int(value) for value in custom.split(",") if value.strip()]
+        except ValueError:
+            raise ValueError("Frames must be comma-separated numbers")
+        return check_custom(distinct, indices)
+    return pick_arc(distinct, arc, count) if arc else pick_indices(distinct, count)
 
 
 # --- jobs --------------------------------------------------------------------------------
@@ -218,14 +224,16 @@ def get_run(
     run_id: str,
     count: int = Query(DEFAULT_COUNT, ge=2, le=137),
     arc: float = Query(DEFAULT_ARC, ge=0, lt=180),
+    custom: str | None = None,
 ):
     run = run_dir(run_id)
     state = read_state(run)
     frames = orbit_frames(run) if state.get("status") not in ("uploaded", "orbiting") else []
+    distinct = distinct_frames(run / "orbit") if frames else []
     selected, selection_error = [], None
     if frames:
         try:
-            selected = select_frames(len(frames), arc, count)
+            selected = select_frames(distinct, arc, count, custom)
         except ValueError as error:
             selection_error = str(error)
     splat = run / "splat" / "splat.ply"
@@ -239,9 +247,12 @@ def get_run(
         "input_url": url_for(run, state["input"]),
         "orbit_video_url": url_for(run, "orbit.mp4") if (run / "orbit.mp4").exists() else None,
         "frames": [url_for(run, f.relative_to(run).as_posix()) for f in frames],
+        "distinct": distinct,
         "selected": selected,
         "selection_error": selection_error,
-        "arc_frames": arc_frame_count(len(frames), arc) if frames and arc else len(frames),
+        "arc_frames": arc_frame_count(distinct, arc) if distinct and arc else len(distinct),
+        # What the last splat was built from, so the page can show it.
+        "built": {key: state[key] for key in ("indices", "arc", "count") if key in state},
         "splat_url": url_for(run, "splat/splat.ply") if splat.exists() else None,
         "subject": bool(state.get("subject")),
         "refine": state.get("refine", True),
@@ -265,6 +276,7 @@ def make_splat(
     run_id: str,
     count: int = Query(DEFAULT_COUNT, ge=2, le=137),
     arc: float = Query(DEFAULT_ARC, ge=0, lt=180),
+    custom: str | None = None,
     subject: bool = False,
     refine: bool = True,
 ):
@@ -273,10 +285,11 @@ def make_splat(
     if read_state(run).get("status") in ("uploaded", "orbiting") or not frames:
         raise HTTPException(409, "Make the orbit before building a splat")
     try:
-        indices = select_frames(len(frames), arc, count)
+        indices = select_frames(distinct_frames(run / "orbit"), arc, count, custom)
     except ValueError as error:
         raise HTTPException(400, str(error))
-    write_state(run, indices=indices, arc=arc, count=count, subject=subject, refine=refine)
+    arc = "custom" if custom is not None else arc
+    write_state(run, indices=indices, arc=arc, count=len(indices), subject=subject, refine=refine)
     start_job(run, splat_job)
     return {"ok": True}
 

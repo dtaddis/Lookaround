@@ -47,7 +47,10 @@ which soaks up some of H3's drift. All the frames are filmed from one height, so
 far above or below the orbit shows needle-like Gaussians.
 
 **Which views?** The whole orbit (48 frames) by default, for the full volume: on held-out
-frames 48 beat 32, and 24 fell apart. The front arcs
+frames 48 beat 32, and 24 fell apart. Frames where H3's camera has stopped (it often pauses at
+the start, and can arrive back at the photo well before the clip ends) are skipped by both
+AnySplat and refining (`lookaround/frames.py`). Click frames to pick your own (Views: Custom);
+the photo always stays, as the splat is anchored to it. The front arcs
 (±30° to ±90° around the photo) are there for a front-only viewer.
 
 ## Set up

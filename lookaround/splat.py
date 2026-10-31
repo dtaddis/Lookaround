@@ -27,7 +27,7 @@ from src.model.model.anysplat import AnySplat  # noqa: E402
 from src.model.ply_export import export_ply  # noqa: E402
 
 from lookaround import carve, subject  # noqa: E402
-from lookaround.frames import DROP_TAIL  # noqa: E402
+from lookaround.frames import distinct_frames  # noqa: E402
 
 # Half-width of the central window (in normalised image coordinates) whose Gaussians decide
 # how far away the subject is.
@@ -138,11 +138,11 @@ def main() -> None:
 
     masks = None
     if args.subject_masks:
-        # Mask every usable frame, not only the chosen ones: refine.py trains on all of them.
+        # Mask every distinct frame, not only the chosen ones: refine.py trains on all of them.
         progress(6, "Masking the subject in each frame")
-        usable = frames[: len(frames) - DROP_TAIL]
-        every_mask = subject.subject_masks(usable, args.subject_masks)
-        masks = [every_mask[i] for i in indices]
+        distinct = distinct_frames(args.frames_dir)
+        every_mask = subject.subject_masks([frames[i] for i in distinct], args.subject_masks)
+        masks = [every_mask[distinct.index(i)] for i in indices]
 
     device = torch.device("cuda")
     progress(10, "Loading AnySplat weights")

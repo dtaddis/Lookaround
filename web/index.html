@@ -53,9 +53,14 @@
   .status.error { color: var(--bad); }
   .status.done { color: var(--good); }
   .muted { color: var(--muted); font-size: 13px; }
-  .frames { display: grid; grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); gap: 6px; margin-top: 10px; }
-  .frames img { width: 100%; aspect-ratio: 3 / 4; object-fit: cover; border-radius: 6px; opacity: .35; border: 2px solid transparent; }
+  /* --frame-aspect is set from the photo, so thumbnails show whole frames. */
+  .frames { --frame-aspect: 3 / 4; display: grid; grid-template-columns: repeat(auto-fill, minmax(88px, 1fr)); gap: 6px; margin-top: 10px; }
+  .frames img { display: block; width: 100%; aspect-ratio: var(--frame-aspect); object-fit: contain; background: var(--bg);
+                border-radius: 6px; opacity: .35; border: 2px solid transparent; box-sizing: border-box; cursor: pointer; }
+  .frames img:hover { opacity: .7; }
   .frames img.used { opacity: 1; border-color: var(--accent); }
+  .frames img.photo { cursor: default; }
+  .frames img.still { opacity: .15; cursor: not-allowed; border: 2px dashed var(--line); }
   pre.log { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; font-size: 12px; max-height: 180px; overflow: auto; white-space: pre-wrap; margin: 10px 0 0; }
   .hidden { display: none; }
 </style>
@@ -100,10 +105,12 @@
       <h2 style="font-size:16px;margin:0">Frames sent to AnySplat</h2>
       <span class="muted" id="frameCount"></span>
     </div>
-    <p class="muted">Highlighted frames are the ones AnySplat reconstructs from. Each one places its
-      pixels at its own depth guess; Gaussians that another view sees straight through are carved
-      away afterwards. <strong>Refine</strong> then sharpens the splat against every orbit frame at
-      full size. <strong>Subject only</strong> also cuts the background out of every frame.</p>
+    <p class="muted">Highlighted frames are the ones AnySplat reconstructs from; click a frame to add
+      or drop it (the photo, first, always stays). Dashed frames are skipped because the camera
+      had stopped. Each chosen frame places its pixels at its own depth guess; Gaussians that
+      another view sees straight through are carved away afterwards. <strong>Refine</strong> then
+      sharpens the splat against every orbit frame at full size. <strong>Subject only</strong>
+      also cuts the background out of every frame.</p>
     <div class="frames" id="frames"></div>
     <p class="muted hidden" id="selectionError" style="color:var(--bad)"></p>
     <div class="row" style="margin-top:14px">
@@ -113,6 +120,7 @@
           <option value="30">Front, ±30°</option>
           <option value="60">Front, ±60°</option>
           <option value="90">Front, ±90°</option>
+          <option value="custom">Custom</option>
         </select>
       </label>
       <label class="field">Frames <input type="number" id="count" min="2" max="137" value="48"></label>
@@ -133,6 +141,8 @@ const $ = (id) => document.getElementById(id);
 let runId = null;
 let pollTimer = null;
 let subjectSyncedFor = null;  // the run whose "Subject only" and "Refine" settings the checkboxes show
+let custom = new Set();  // the hand-picked frames, when Views is Custom
+let lastRun = null;
 
 function setRunId(id) {
   runId = id;
@@ -147,6 +157,7 @@ async function api(path, options) {
 }
 
 function selectionQuery() {
+  if ($("arc").value === "custom") return `custom=${[...custom].sort((a, b) => a - b).join(",")}`;
   const count = Math.max(2, Math.min(137, parseInt($("count").value, 10) || 48));
   return `count=${count}&arc=${$("arc").value}`;
 }
@@ -187,14 +198,23 @@ function render(run) {
   const hasFrames = run.frames.length > 0;
   $("frameSection").classList.toggle("hidden", !hasFrames);
   if (hasFrames) {
-    $("frameCount").textContent = `${run.selected.length} of ${run.frames.length} orbit frames` +
-      ($("arc").value !== "0" ? ` (${run.arc_frames} in the arc)` : "");
+    const still = run.frames.length - run.distinct.length;
+    const arc = $("arc").value;
+    $("frameCount").textContent = `${run.selected.length} of ${run.distinct.length} orbit frames` +
+      (arc !== "0" && arc !== "custom" ? ` (${run.arc_frames} in the arc)` : "") +
+      (still ? `; ${still} still frames skipped` : "");
     $("selectionError").textContent = run.selection_error || "";
     $("selectionError").classList.toggle("hidden", !run.selection_error);
     const used = new Set(run.selected);
-    $("frames").innerHTML = run.frames.map((url, i) =>
-      `<img src="${url}" loading="lazy" alt="Orbit frame ${i}" class="${used.has(i) ? "used" : ""}">`).join("");
+    const distinct = new Set(run.distinct);
+    $("frames").innerHTML = run.frames.map((url, i) => {
+      const kind = i === 0 ? "photo used" : !distinct.has(i) ? "still" : used.has(i) ? "used" : "";
+      const title = i === 0 ? "The photo: always used" : !distinct.has(i) ? `Frame ${i}: the camera had stopped, so it's skipped`
+        : `Frame ${i}: click to ${used.has(i) ? "drop" : "add"}`;
+      return `<img src="${url}" loading="lazy" data-index="${i}" alt="Orbit frame ${i}" title="${title}" class="${kind}">`;
+    }).join("");
   }
+  $("count").disabled = $("arc").value === "custom";
   const ready = run.status === "orbit_ready" || run.status === "splat_ready" ||
     (run.status === "error" && run.frames.length > 0);
   $("build").disabled = !ready || !!run.selection_error;
@@ -204,6 +224,12 @@ function render(run) {
     $("subject").checked = run.subject;
     $("refine").checked = run.refine && run.can_refine;
     subjectSyncedFor = run.id;
+    if (run.built.arc === "custom") {
+      // Show the hand-picked frames the splat was built from.
+      custom = new Set(run.built.indices);
+      $("arc").value = "custom";
+      refresh().catch(() => {});
+    }
   }
   $("refine").disabled = !run.can_refine;
   $("viewer").classList.toggle("hidden", !run.splat_url);
@@ -217,6 +243,7 @@ function render(run) {
 async function refresh() {
   if (!runId) return;
   const run = await api(`/api/runs/${runId}?${selectionQuery()}`);
+  lastRun = run;
   render(run);
   const busy = run.status === "orbiting" || run.status === "splatting";
   if (!busy) stopPolling();
@@ -265,11 +292,33 @@ $("orbit").addEventListener("click", async () => {
 });
 
 $("arc").addEventListener("change", () => {
-  // A sensible default count for each range: about one frame every 5 degrees, at most 32, and
-  // 48 for the whole orbit.
-  const arc = Number($("arc").value);
-  $("count").value = arc ? Math.min(32, Math.round((2 * arc) / 5) + 1) : 48;
+  if ($("arc").value === "custom") {
+    // Start from whatever was selected before.
+    custom = new Set(lastRun ? lastRun.selected : [0]);
+  } else {
+    // A sensible default count for each range: about one frame every 5 degrees, at most 32,
+    // and 48 for the whole orbit.
+    const arc = Number($("arc").value);
+    $("count").value = arc ? Math.min(32, Math.round((2 * arc) / 5) + 1) : 48;
+  }
   if (runId) refresh().catch(() => {});
+});
+
+$("frames").addEventListener("click", (event) => {
+  const index = Number(event.target.dataset.index);
+  if (!lastRun || !index || !lastRun.distinct.includes(index)) return;  // the photo, or a still frame
+  if ($("arc").value !== "custom") {
+    custom = new Set(lastRun.selected);
+    $("arc").value = "custom";
+  }
+  if (custom.has(index)) custom.delete(index); else custom.add(index);
+  refresh().catch(() => {});
+});
+
+// Thumbnails take the photo's shape (the orbit keeps it).
+$("photo").addEventListener("load", () => {
+  const photo = $("photo");
+  if (photo.naturalWidth) $("frames").style.setProperty("--frame-aspect", `${photo.naturalWidth} / ${photo.naturalHeight}`);
 });
 $("count").addEventListener("change", () => { if (runId) refresh().catch(() => {}); });
 
