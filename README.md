@@ -7,7 +7,9 @@ lets you look around the result in a web browser or a VR headset. Everything run
 1. **Orbit.** MiniMax H3 with Pablo Dawson's 360° orbit LoRA films a camera orbit around the
    frozen scene, through a local ComfyUI (`lookaround/orbit.py`).
 2. **Splat.** AnySplat reconstructs Gaussians, and a camera for every view, from a selection of
-   the orbit's frames (`lookaround/splat.py`). Gaussians that another view sees straight
+   the orbit's frames (`lookaround/splat.py`), with its cameras corrected to square pixels
+   (it guesses the horizontal and vertical fields of view separately, and on portrait frames
+   got them badly out of step, building the splat too wide). Gaussians that another view sees straight
    through are then carved away (`lookaround/carve.py`); optionally, only the subject is kept
    (`lookaround/subject.py`).
 3. **Refine.** The splat is optimised against every orbit frame at full size, the usual 3DGS

@@ -23,6 +23,7 @@ import torch  # noqa: E402
 import torchvision.transforms.functional as TF  # noqa: E402
 from PIL import Image  # noqa: E402
 
+import src.model.encoder.anysplat as anysplat_encoder  # noqa: E402
 from src.model.model.anysplat import AnySplat  # noqa: E402
 from src.model.ply_export import export_ply  # noqa: E402
 
@@ -46,6 +47,31 @@ def load_frame(path: Path, long_side: int = LONG_SIDE) -> torch.Tensor:
     width, height = (max(PATCH, round(side * scale / PATCH) * PATCH) for side in image.size)
     image = image.resize((width, height), Image.Resampling.LANCZOS)
     return TF.to_tensor(image) * 2.0 - 1.0
+
+
+def square_pixels(focal: str) -> None:
+    """Make AnySplat's cameras square-pixelled before it unprojects its depth maps.
+
+    Its camera head predicts the horizontal and vertical fields of view separately, and was
+    trained on square crops: on portrait frames the two disagree badly (Marilyn's horizontal
+    focal length came out 0.68 of the vertical, in pixels), and the splat is built that much too
+    wide. focal picks the one focal length both axes get: "height" (from the vertical field of
+    view), "width", or "mean" (their geometric mean). On Marilyn all three made the photo view
+    match the photo (26 dB, against 10.7 stretched); "height" scored best on held-out frames.
+    """
+    predict = anysplat_encoder.pose_encoding_to_extri_intri
+
+    def patched(*args, **kwargs):
+        extrinsic, intrinsic = predict(*args, **kwargs)
+        if intrinsic is not None:
+            fx, fy = intrinsic[..., 0, 0], intrinsic[..., 1, 1]
+            f = {"height": fy, "width": fx, "mean": (fx * fy).sqrt()}[focal]
+            intrinsic = intrinsic.clone()
+            intrinsic[..., 0, 0] = f
+            intrinsic[..., 1, 1] = f
+        return extrinsic, intrinsic
+
+    anysplat_encoder.pose_encoding_to_extri_intri = patched
 
 
 def keep_only_pixels(model: AnySplat, subject: torch.Tensor) -> None:
@@ -128,7 +154,12 @@ def main() -> None:
                         help="Keep only the subject, caching its masks in DIR")  # fmt: skip
     parser.add_argument("--long-side", type=int, default=LONG_SIDE,
                         help="Size AnySplat sees each frame at (a multiple of 14)")  # fmt: skip
+    parser.add_argument("--focal", choices=["height", "width", "mean", "anysplat"], default="height",
+                        help="Square AnySplat's pixels with this focal length, or keep its own "
+                             "cameras (see square_pixels)")  # fmt: skip
     args = parser.parse_args()
+    if args.focal != "anysplat":
+        square_pixels(args.focal)
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
     frames = sorted(args.frames_dir.glob("frame_*.png"))
