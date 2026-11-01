@@ -20,6 +20,13 @@
   #panel a { background: transparent; border: 1px solid #555; }
   #bar { height: 4px; background: #333; border-radius: 4px; overflow: hidden; margin: 0 0 8px; }
   #bar > div { height: 100%; width: 0; background: #6b9cf0; }
+  #panel button.on { background: #2a8a4a; }
+  #sr3d { margin-top: 10px; border-top: 1px solid #444; padding-top: 8px; font-size: 13px; }
+  #sr3d label { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+  #sr3d input[type="range"] { flex: 1; }
+  #sr3d select { background: #222; color: #eee; border: 1px solid #555; border-radius: 5px; font: inherit; }
+  #srStatus.warn { color: #ffc46b; }
+  #srStatus.error { color: #ff9b94; }
 </style>
 <script type="importmap">
 {
@@ -37,13 +44,28 @@
   <div id="bar"><div></div></div>
   <p id="details"></p>
   <button id="home" type="button">Photo view</button>
+  <button id="sr" type="button" title="Glasses-free 3D on an SR display (Acer SpatialLabs, Samsung Odyssey 3D)">3D display</button>
   <a id="back" href="/">Back</a>
+  <div id="sr3d" hidden>
+    <p id="srStatus" style="margin:0 0 4px"></p>
+    <label>Depth <input id="srDepth" type="range" min="0.3" max="2" step="0.05" value="1"></label>
+    <label>Detail <select id="srScale">
+      <option value="0.5">Half</option><option value="0.75">Three quarters</option><option value="1">Full</option>
+    </select></label>
+    <label>Test <select id="srPattern">
+      <option value="0">Off</option><option value="2">Left red, right blue</option><option value="1">Left white, right black</option>
+    </select></label>
+    <label><input id="srSwap" type="checkbox"> Swap eyes</label>
+    <div style="color:#aaa">At depth 1 the subject is level with the screen; lower sets it back behind the glass,
+      higher brings it out towards you. H hides this panel; Esc leaves 3D.</div>
+  </div>
 </div>
 <script type="module">
   import * as THREE from "three";
   import { TrackballControls } from "three/addons/controls/TrackballControls.js";
   import { VRButton } from "three/addons/webxr/VRButton.js";
   import { SparkRenderer, SplatMesh } from "@sparkjsdev/spark";
+  import { LenticularRenderer, SRStream, enterFullscreen } from "./lenticular.js";
 
   const $ = (id) => document.getElementById(id);
   const params = new URLSearchParams(location.search);
@@ -64,7 +86,8 @@
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x111111);
   const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.01, 1000);
-  scene.add(new SparkRenderer({ renderer }));
+  const spark = new SparkRenderer({ renderer });
+  scene.add(spark);
 
   // AnySplat's world is its first view's camera with OpenCV axes (x right, y down, z forward).
   // A half turn about x gives three.js axes (y up, z back), so the photo's camera sits at the
@@ -133,6 +156,7 @@
     if (event.code in FLY_KEYS) held.add(event.code);
     if (event.code === "ShiftLeft" || event.code === "ShiftRight") held.add("Shift");
     if (event.code === "KeyR" || event.code === "Home") flyHome();
+    if (event.code === "KeyH" && sr.on) $("panel").hidden = !$("panel").hidden;
   });
   window.addEventListener("keyup", (event) => {
     held.delete(event.code);
@@ -192,11 +216,80 @@
       $("status").textContent = `Could not load ${splatUrl}: ${error.message || error}`;
     });
 
-  window.addEventListener("resize", () => {
+  // 3D display mode: the SR helper switches the display's lens on and streams the eyes; the view
+  // is rendered for each eye and woven at the screen's full resolution (see lenticular.js).
+  const sr = { on: false, stream: new SRStream(), lenticular: new LenticularRenderer(renderer) };
+  const pixelRatio = () => (sr.on ? window.devicePixelRatio : Math.min(window.devicePixelRatio, 2));
+
+  function srStatus() {
+    const el = $("srStatus");
+    const { stream } = sr;
+    const buffer = renderer.getDrawingBufferSize(new THREE.Vector2());
+    let text, kind = "";
+    if (stream.error) {
+      text = `No SR display: ${stream.error}`;
+      kind = "error";
+    } else if (!stream.screen) {
+      text = "Switching the lens on…";
+    } else if (!document.fullscreenElement) {
+      text = "Not fullscreen: the 3D only lines up fullscreen on the SR display.";
+      kind = "warn";
+    } else if (buffer.x !== stream.screen.columns || buffer.y !== stream.screen.rows) {
+      text = `This screen is ${buffer.x}×${buffer.y}, not the SR display's ${stream.screen.columns}×` +
+        `${stream.screen.rows}: move the window onto it (and set the browser's zoom to 100%).`;
+      kind = "warn";
+    } else {
+      text = stream.tracking ? "3D on, tracking your eyes" : "3D on, but no eyes in view of the camera";
+      kind = stream.tracking ? "" : "warn";
+    }
+    el.textContent = text;
+    el.className = kind;
+  }
+  sr.stream.onchange = srStatus;
+
+  async function startSR() {
+    sr.on = true;
+    $("sr").classList.add("on");
+    $("sr3d").hidden = false;
+    sr.stream.open();
+    srStatus();
+    // Fullscreen needs the click's user activation, so ask now; the stream's first message (the
+    // screen's size, to find the right screen) can't be waited for.
+    try {
+      await enterFullscreen(document.documentElement, sr.stream);
+    } catch {
+      // refused: the status says so
+    }
+  }
+
+  function stopSR() {
+    sr.on = false;
+    sr.stream.close();
+    $("sr").classList.remove("on");
+    $("sr3d").hidden = true;
+    $("panel").hidden = false;
+    if (document.fullscreenElement) document.exitFullscreen();
+    resize();
+  }
+
+  $("sr").addEventListener("click", () => (sr.on ? stopSR() : startSR()));
+  document.addEventListener("fullscreenchange", () => {
+    if (sr.on && !document.fullscreenElement) stopSR();
+    resize();
+  });
+  $("srDepth").addEventListener("input", (e) => (sr.lenticular.screenDepth = +e.target.value));
+  $("srScale").addEventListener("change", (e) => (sr.lenticular.renderScale = +e.target.value));
+  $("srPattern").addEventListener("change", (e) => (sr.lenticular.pattern = +e.target.value));
+  $("srSwap").addEventListener("change", (e) => (sr.lenticular.swapEyes = e.target.checked));
+
+  function resize() {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
+    renderer.setPixelRatio(pixelRatio());
     renderer.setSize(window.innerWidth, window.innerHeight);
-  });
+    if (sr.on) srStatus();
+  }
+  window.addEventListener("resize", resize);
 
   const clock = new THREE.Clock();
   renderer.setAnimationLoop((now) => {
@@ -209,7 +302,11 @@
         controls.update();
       }
     }
-    renderer.render(scene, camera);
+    if (sr.on && sr.stream.ready && !renderer.xr.isPresenting) {
+      sr.lenticular.render(scene, camera, spark, camera.position.distanceTo(controls.target), sr.stream);
+    } else {
+      renderer.render(scene, camera);
+    }
   });
 </script>
 </body>

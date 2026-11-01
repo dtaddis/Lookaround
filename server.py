@@ -6,6 +6,7 @@ Each run lives in runs/<id>/: the photo (input.*), orbit/frame_NNNN.png, orbit.m
 splat/splat.ply with splat/splat.json, state.json and job.log.
 """
 
+import asyncio
 import contextlib
 import json
 import random
@@ -17,7 +18,8 @@ import threading
 import uuid
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from lookaround.comfy import ComfyClient, ComfyError
@@ -52,6 +54,7 @@ async def lifespan(app: FastAPI):
     mark_interrupted()
     comfyui.start()  # it takes a while to load, so start it now rather than at the first orbit
     yield
+    sr_display.stop(force=True)
     comfyui.stop()
 
 
@@ -337,6 +340,115 @@ def make_splat(
     write_state(run, indices=indices, arc=arc, count=len(indices), subject=subject, refine=refine)
     start_job(run, splat_job)
     return {"ok": True}
+
+
+# --- SR (glasses-free 3D) displays ---------------------------------------------------------
+
+
+class SRDisplay:
+    """The SR helper (lookaround/sr.py), running while any viewer is in 3D display mode: it
+    switches the display's lens on and reports the eyes and the lens for the viewer to weave."""
+
+    LINGER = 5  # seconds to keep the lens on after the last viewer leaves, in case it reloads
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.process: subprocess.Popen | None = None
+        self.clients = 0
+        self.first: str | None = None  # the helper's first line: the screen and lens, or an error
+        self.latest: str | None = None
+        self.timer: threading.Timer | None = None
+        self.streams: set[tuple[asyncio.AbstractEventLoop, asyncio.Event]] = set()  # woken per line
+
+    def attach(self) -> None:
+        with self.lock:
+            self.clients += 1
+            if self.timer:
+                self.timer.cancel()
+                self.timer = None
+            if self.process is None or self.process.poll() is not None:
+                self.first = self.latest = None
+                self.process = subprocess.Popen(
+                    [sys.executable, "-m", "lookaround.sr"],
+                    cwd=ROOT,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,  # the runtime's own log chatter
+                    text=True,
+                )
+                threading.Thread(target=self.read, args=(self.process,), daemon=True).start()
+
+    def read(self, process: subprocess.Popen) -> None:
+        for line in process.stdout:
+            with self.lock:
+                if process is not self.process:
+                    break
+                self.first = self.first or line.strip()
+                self.latest = line.strip()
+                for loop, event in tuple(self.streams):  # (streams come and go on another thread)
+                    loop.call_soon_threadsafe(event.set)
+
+    def detach(self) -> None:
+        with self.lock:
+            self.clients -= 1
+            if self.clients == 0:
+                self.timer = threading.Timer(self.LINGER, self.stop)
+                self.timer.start()
+
+    def running(self) -> bool:
+        with self.lock:
+            return self.process is not None and self.process.poll() is None
+
+    def stop(self, force: bool = False) -> None:
+        with self.lock:
+            if (self.clients and not force) or self.process is None:
+                return
+            process, self.process = self.process, None
+        with contextlib.suppress(OSError):
+            process.stdin.write("quit\n")
+            process.stdin.close()
+        try:
+            process.wait(5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+
+
+sr_display = SRDisplay()
+
+
+@app.get("/api/sr")
+async def sr_stream(request: Request):
+    """Server-sent events from the SR helper: first the screen and lens (or an error), then the
+    eyes and weave as often as the helper reports them."""
+
+    async def events():
+        new_line = asyncio.Event()
+        stream = (asyncio.get_running_loop(), new_line)
+        sr_display.streams.add(stream)
+        sr_display.attach()
+        try:
+            while sr_display.first is None and sr_display.running():
+                await asyncio.sleep(0.05)
+            if sr_display.first is None:
+                yield f"data: {json.dumps({'error': 'The SR helper stopped'})}\n\n"
+                return
+            yield f"data: {sr_display.first}\n\n"
+            if "error" in json.loads(sr_display.first):
+                return
+            while not await request.is_disconnected():
+                with contextlib.suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(new_line.wait(), 1)
+                if new_line.is_set():
+                    new_line.clear()
+                    yield f"data: {sr_display.latest}\n\n"
+                elif not sr_display.running():
+                    yield f"data: {json.dumps({'error': 'The SR helper stopped'})}\n\n"
+                    return
+        finally:
+            sr_display.streams.discard(stream)
+            sr_display.detach()
+
+    return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
 
 
 app.mount("/runs", StaticFiles(directory=RUNS), name="runs")

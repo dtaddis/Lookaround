@@ -15,7 +15,8 @@ lets you look around the result in a web browser or a VR headset. Everything run
 4. **View.** A three.js + Spark viewer opens on the photo's own viewpoint (`web/viewer.html`)
    and lets you move freely: drag to turn any way round the subject (round the window's edge
    to roll), right-drag to pan, scroll to move in, WASD/QE to fly, and R to glide back to the
-   photo. A WebXR button opens it in a headset.
+   photo. A WebXR button opens it in a headset, and **3D display** shows it glasses-free on an
+   SR display (below).
 
 ## Install and run
 
@@ -68,6 +69,27 @@ the start, and can arrive back at the photo well before the clip ends) are skipp
 AnySplat and refining (`lookaround/frames.py`). Click frames to pick your own (Views: Custom);
 the photo always stays, as the splat is anchored to it. The front arcs
 (±30° to ±90° around the photo) are there for a front-only viewer.
+
+## Glasses-free 3D displays
+
+The viewer's **3D display** button shows the splat in true 3D on an SR (Simulated Reality)
+display: Acer SpatialLabs monitors and laptops, the Samsung Odyssey 3D, and other eye-tracked
+lenticular panels on the LeiaSR / Dimenco runtime. Put the browser window on the SR display
+and press it: the page goes fullscreen there and the display's lens switches on.
+
+It works the way [SR Loom](https://github.com/effcol/SR-Loom) does, without Acer's or
+Samsung's 3D apps, and needs only the SR Platform runtime that comes with the display.
+`lookaround/sr.py`, which the server runs while a viewer is in 3D mode, asks the runtime to
+switch the lens on, reads the eye tracker, and has the runtime's weaver work out the lens phase
+of every sub-pixel for each eye. The viewer renders a view for each eye, from where that eye
+actually is, through the screen as a window (so the image shifts with your head), and weaves
+the two itself in WebGL. The lens switches off a few seconds after you leave 3D mode.
+
+If the two eyes' images look swapped (the scene looks inside out), tick **Swap eyes**. The
+**Test** pattern (left eye red, right eye blue) checks it: close one eye and that eye's colour
+should fill the screen. Made on an Acer Predator SpatialLabs View 27; the Odyssey 3D uses the
+same runtime but hasn't been tried. If the runtime isn't where its installer registered it,
+set `LOOKAROUND_SR_BIN` to the folder holding `SimulatedRealityCore.dll`.
 
 ## What install.bat sets up
 
