@@ -13,7 +13,8 @@ Gaussian's colour change a little with the view, which absorbs some of H3's drif
 
 With --masks (the subject masks, one per orbit frame) the background is trained to be empty.
 Gaussians left nearly transparent are dropped on saving: MCMC keeps them as spares, and they
-can be half the file. Rewrites splat_dir/splat.ply, keeping AnySplat's version as splat_anysplat.ply, and prints
+can be half the file. If MCMC collapses (from a poor AnySplat start it can fade the whole splat
+out), the refine is redone with gsplat's default densification for 4,000 steps. Rewrites splat_dir/splat.ply, keeping AnySplat's version as splat_anysplat.ply, and prints
 "PROGRESS <percent> <message>" lines.
 """
 
@@ -28,7 +29,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from gsplat import rasterization
-from gsplat.strategy import MCMCStrategy
+from gsplat.strategy import DefaultStrategy, MCMCStrategy
 from PIL import Image
 from plyfile import PlyData, PlyElement
 
@@ -50,6 +51,12 @@ OPACITY_REG = 0.01
 SCALE_REG = 0.01
 # Saved Gaussians below this opacity are dropped: they don't change the picture.
 MIN_OPACITY = 0.01
+# MCMC has collapsed if it kept fewer than this share of AnySplat's Gaussians above MIN_OPACITY
+# (good runs keep 70-86%; the collapsed Mona Lisa kept 1.3%), or if its renders of a sample of
+# frames score less than this much above the start's. Then the refine is redone by densifying.
+MIN_KEPT = 0.25
+MIN_GAIN_DB = 0.5
+DENSIFY_STEPS = 4000
 SH_C0 = 0.28209479177387814
 
 
@@ -240,22 +247,12 @@ def main() -> None:
     original = args.splat_dir / "splat_anysplat.ply"
     if not original.exists():
         shutil.copyfile(args.splat_dir / "splat.ply", original)
-    params = torch.nn.ParameterDict(
-        {k: torch.nn.Parameter(v) for k, v in load_ply(original, device, args.sh_degree).items()}
-    )
-    optimizers = {
-        name: torch.optim.Adam([params[name]], lr=lr * (scene_scale if name == "means" else 1),
-                               eps=1e-15)  # fmt: skip
-        for name, lr in LEARNING_RATES.items()
-    }
-    means_decay = torch.optim.lr_scheduler.ExponentialLR(optimizers["means"], 0.01 ** (1 / args.steps))
-    # Pose corrections: rotation vector and translation per camera; the photo's stays put.
-    pose = torch.nn.Parameter(torch.zeros(len(cameras), 6, device=device))
-    pose_optimizer = torch.optim.Adam([pose], lr=args.pose_lr or 1e-12)
     held_out = set(range(args.holdout, len(frames), args.holdout)) if args.holdout else set()
     training = [i for i in range(len(frames)) if i not in held_out]
+    # Frames the result is checked against for a collapse (see below).
+    check_views = training[:: max(1, len(training) // 16)]
 
-    def render(view: int, sh_degree: int):
+    def render(params, pose, view: int, sh_degree: int, absgrad: bool = False):
         viewmat = w2c[view : view + 1]
         if view != 0:
             # A held-out frame never learns its own correction; borrow its neighbours'.
@@ -268,7 +265,7 @@ def main() -> None:
         image, alpha, info = rasterization(
             params["means"], F.normalize(params["quats"], dim=-1), params["scales"].exp(),
             params["opacities"].sigmoid(), colours, viewmat, ks[view : view + 1], width, height,
-            sh_degree=sh_degree, packed=False,
+            sh_degree=sh_degree, absgrad=absgrad, packed=False,
         )  # fmt: skip
         return image[0].permute(2, 0, 1)[None], alpha, info
 
@@ -278,66 +275,120 @@ def main() -> None:
             return target, None
         matte = masks[view][None, None].float() / 255
         return target * matte, matte
-    start_count = len(params["means"])
-    strategy = MCMCStrategy(cap_max=int(start_count * MCMC_CAP), refine_start_iter=300,
-                            refine_stop_iter=int(args.steps * 0.6), refine_every=100)  # fmt: skip
-    strategy.check_sanity(params, optimizers)
-    state = strategy.initialize_state()
 
-    def score(label: str, sh_degree: int) -> None:
-        """Print the mean PSNR and SSIM over the held-out frames."""
+    def psnr_ssim(params, pose, views, sh_degree: int) -> tuple[float, float]:
+        """Mean PSNR and SSIM of the splat's renders of these frames."""
         scores = []
         with torch.no_grad():
-            for view in sorted(held_out):
-                image = render(view, sh_degree)[0].clamp(0, 1)
+            for view in views:
+                image = render(params, pose, view, sh_degree)[0].clamp(0, 1)
                 target, _ = target_for(view)
                 psnr = -10 * torch.log10(((image - target) ** 2).mean())
                 scores.append((float(psnr), float(ssim(image, target))))
-        psnr, similarity = np.mean(scores, axis=0)
-        print(f"HELDOUT {label}: {len(scores)} frames, PSNR {psnr:.2f} dB, SSIM {similarity:.4f}",
+        return tuple(np.mean(scores, axis=0))
+
+    def score(label: str, params, pose, sh_degree: int) -> None:
+        """Print the mean PSNR and SSIM over the held-out frames."""
+        psnr, similarity = psnr_ssim(params, pose, sorted(held_out), sh_degree)
+        print(f"HELDOUT {label}: {len(held_out)} frames, PSNR {psnr:.2f} dB, SSIM {similarity:.4f}",
               flush=True)  # fmt: skip
 
+    def refine(method: str, steps: int, first: int, last: int):
+        """Optimise a fresh copy of AnySplat's splat, with MCMC ("mcmc") or gsplat's default
+        densification ("densify", Lookaround's refine before MCMC). Reports progress from first
+        to last percent. Returns the parameters and the camera corrections."""
+        params = torch.nn.ParameterDict(
+            {k: torch.nn.Parameter(v) for k, v in load_ply(original, device, args.sh_degree).items()}
+        )
+        optimizers = {
+            name: torch.optim.Adam([params[name]], lr=lr * (scene_scale if name == "means" else 1),
+                                   eps=1e-15)  # fmt: skip
+            for name, lr in LEARNING_RATES.items()
+        }
+        means_decay = torch.optim.lr_scheduler.ExponentialLR(optimizers["means"], 0.01 ** (1 / steps))
+        # Pose corrections: rotation vector and translation per camera; the photo's stays put.
+        pose = torch.nn.Parameter(torch.zeros(len(cameras), 6, device=device))
+        pose_optimizer = torch.optim.Adam([pose], lr=args.pose_lr or 1e-12)
+        mcmc = method == "mcmc"
+        if mcmc:
+            strategy = MCMCStrategy(cap_max=int(len(params["means"]) * MCMC_CAP), refine_start_iter=300,
+                                    refine_stop_iter=int(steps * 0.6), refine_every=100)  # fmt: skip
+            state = strategy.initialize_state()
+        else:
+            strategy = DefaultStrategy(
+                refine_start_iter=300, refine_stop_iter=int(steps * 0.6), refine_every=100,
+                reset_every=steps * 10, absgrad=True, grow_grad2d=0.0008, verbose=False,
+            )  # fmt: skip
+            state = strategy.initialize_state(scene_scale=scene_scale)
+        strategy.check_sanity(params, optimizers)
+
+        order: list[int] = []
+        for step in range(steps):
+            if not order:
+                order = random.sample(training, len(training))
+            view = order.pop()
+            image, alpha, info = render(params, pose, view, min(args.sh_degree, step // 1000), absgrad=not mcmc)
+            target, matte = target_for(view)
+            loss = (1 - SSIM_WEIGHT) * (image - target).abs().mean() + SSIM_WEIGHT * (1 - ssim(image, target))
+            if matte is not None:
+                loss = loss + MASK_WEIGHT * (alpha[0, ..., 0] - matte[0, 0]).abs().mean()
+            if mcmc:
+                loss = (loss + OPACITY_REG * params["opacities"].sigmoid().mean()
+                        + SCALE_REG * params["scales"].exp().mean())  # fmt: skip
+
+            strategy.step_pre_backward(params, optimizers, state, step, info)
+            loss.backward()
+            for optimizer in [*optimizers.values(), pose_optimizer]:
+                optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
+            means_decay.step()
+            if mcmc:
+                strategy.step_post_backward(params, optimizers, state, step, info,
+                                            lr=optimizers["means"].param_groups[0]["lr"])  # fmt: skip
+            else:
+                strategy.step_post_backward(params, optimizers, state, step, info, packed=False)
+
+            if step % 100 == 0 or step == steps - 1:
+                progress(first + int((last - first) * (step + 1) / steps),
+                         f"Refining{'' if mcmc else ' again (densifying)'}: step {step + 1:,} of {steps:,}, "
+                         f"{len(params['means']):,} Gaussians, loss {loss.item():.3f}")  # fmt: skip
+
+        if mcmc:
+            with torch.no_grad():
+                visible = params["opacities"].sigmoid() >= MIN_OPACITY
+                for name in params:
+                    params[name] = torch.nn.Parameter(params[name][visible])
+        return params, pose
+
+    start = load_ply(original, device, args.sh_degree)
+    start_count = len(start["means"])
+    no_pose = torch.zeros(len(cameras), 6, device=device)
     if held_out:
-        score("before refining", 0)
+        score("before refining", start, no_pose, 0)
+    start_psnr = psnr_ssim(start, no_pose, check_views, 0)[0]
+    del start
     progress(5, f"Refining {start_count:,} Gaussians against {len(training)} frames")
-    order: list[int] = []
-    for step in range(args.steps):
-        if not order:
-            order = random.sample(training, len(training))
-        view = order.pop()
-        image, alpha, info = render(view, min(args.sh_degree, step // 1000))
-        target, matte = target_for(view)
-        loss = (1 - SSIM_WEIGHT) * (image - target).abs().mean() + SSIM_WEIGHT * (1 - ssim(image, target))
-        if matte is not None:
-            loss = loss + MASK_WEIGHT * (alpha[0, ..., 0] - matte[0, 0]).abs().mean()
-        loss = (loss + OPACITY_REG * params["opacities"].sigmoid().mean()
-                + SCALE_REG * params["scales"].exp().mean())  # fmt: skip
+    params, pose = refine("mcmc", args.steps, 5, 95)
+    method, steps = "mcmc", args.steps
 
-        strategy.step_pre_backward(params, optimizers, state, step, info)
-        loss.backward()
-        for optimizer in [*optimizers.values(), pose_optimizer]:
-            optimizer.step()
-            optimizer.zero_grad(set_to_none=True)
-        means_decay.step()
-        strategy.step_post_backward(params, optimizers, state, step, info,
-                                    lr=optimizers["means"].param_groups[0]["lr"])  # fmt: skip
-
-        if step % 100 == 0 or step == args.steps - 1:
-            progress(5 + int(90 * (step + 1) / args.steps),
-                     f"Refining: step {step + 1:,} of {args.steps:,}, "
-                     f"{len(params['means']):,} Gaussians, loss {loss.item():.3f}")  # fmt: skip
-
-    with torch.no_grad():
-        visible = params["opacities"].sigmoid() >= MIN_OPACITY
-        for name in params:
-            params[name] = torch.nn.Parameter(params[name][visible])
+    # From a poor start (AnySplat sometimes makes a near-black splat, as of a painting H3 turned
+    # like a card) MCMC can fade everything out instead of fixing it. The old densification
+    # recovers more from there, so if MCMC kept few Gaussians or came out no better than its
+    # start, refine again that way.
+    psnr = psnr_ssim(params, pose, check_views, args.sh_degree)[0]
+    kept = len(params["means"]) / start_count
+    if kept < MIN_KEPT or psnr < start_psnr + MIN_GAIN_DB:
+        print(f"MCMC kept {kept:.1%} of the Gaussians and scored {psnr:.2f} dB against the start's "
+              f"{start_psnr:.2f} dB on the check frames: refining again by densifying", flush=True)  # fmt: skip
+        method, steps = "densify", DENSIFY_STEPS
+        params, pose = refine(method, steps, 60, 95)
     if held_out:
-        score("after refining", args.sh_degree)
+        score("after refining", params, pose, args.sh_degree)
 
     progress(96, "Writing splat.ply")
     save_ply(params, args.splat_dir / "splat.ply")  # gsplat's quaternions are wxyz, as in PLY
-    meta.update(gaussians=len(params["means"]), refined_steps=args.steps,
-                refined_frames=len(frames))  # fmt: skip
+    meta.update(gaussians=len(params["means"]), refined_steps=steps, refined_frames=len(frames),
+                refine_method=method)  # fmt: skip
     (args.splat_dir / "splat.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
     progress(100, f"Done: {len(params['means']):,} Gaussians after refining")
 

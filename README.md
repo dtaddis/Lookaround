@@ -52,7 +52,10 @@ soft. Refining optimises the Gaussians (with gsplat) against all ~150 frames at 
 for 8,000 steps with gsplat's MCMC strategy: rather than splitting and culling Gaussians, it
 keeps a fixed budget (1.5 times AnySplat's) and moves weak ones to where they are needed. On
 held-out orbit frames this beat the usual densification on every test photo. Gaussians it left
-nearly transparent are dropped when the splat is saved.
+nearly transparent are dropped when the splat is saved. From a poor AnySplat start (the Mona
+Lisa, which H3 turned like a flat card, gave a near-black one) MCMC can fade the whole splat
+out instead; when it keeps under a quarter of the Gaussians or barely improves on the start,
+the refine is redone the usual way, densifying for 4,000 steps, which adds about two minutes.
 AnySplat only gives cameras for the frames it saw, so the others are interpolated between them,
 and each camera except the photo's learns a small correction, since H3 doesn't turn at a
 perfectly even speed. Degree-1 spherical harmonics let colours shift slightly with the view,
